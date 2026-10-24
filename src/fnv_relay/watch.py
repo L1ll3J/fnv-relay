@@ -35,7 +35,8 @@ def run(store, claim_id, *, sleep=time.sleep, clock=time.time, owner=None):
             # Read/status outages can recover while the lease is still owned.
             if clock() >= epoch(lease['expires']):
                 return
-            sleep(min(30, max(1, epoch(lease['expires'])-clock())))
+            delay = max(30, getattr(exc,'retry_after',None) or 0)
+            sleep(min(delay, max(1, epoch(lease['expires'])-clock())))
 
 
 def main():

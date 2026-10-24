@@ -246,3 +246,25 @@ def test_event_log_is_bounded_and_chronological(tmp_path):
     with pytest.raises(ValueError):
         store.events(201)
     store.close()
+
+
+def test_long_retry_after_is_returned_without_sleep_or_early_retry():
+    server=Server(error(429,headers={'Retry-After':'3600'}))
+    with pytest.raises(ProjectError) as caught:server.client().call('status',{})
+    assert caught.value.retry_after==3600 and not caught.value.uncertain
+    assert len(server.calls)==1 and server.sleeps==[]
+
+
+def test_shutdown_cancels_read_backoff_and_can_be_disabled_for_cleanup():
+    event=threading.Event()
+    server=Server(error(503),{'open_claims':[]})
+    client=server.client()
+    class StopDuringWait:
+        def wait(self,delay):
+            if delay: event.set()
+            return event.is_set()
+    client.set_stop_event(StopDuringWait())
+    with pytest.raises(ProjectError) as caught:client.call('status',{})
+    assert caught.value.code=='cancelled' and len(server.calls)==1
+    client.set_stop_event(None)
+    assert client.call('status',{})=={'open_claims':[]}

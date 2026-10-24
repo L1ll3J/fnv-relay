@@ -126,6 +126,13 @@ class Engine:
             entry['notified'] = True
             self.store.put_lane(lane)
 
+    def publish_closed_leases(self, lane):
+        for notice in lane.get('closed_lease_notices', []):
+            if notice.get('notified'): continue
+            self.publish(lane, 'lease-closed:'+lane['route_token']+':'+notice['payload']['claim_id'], notice['payload'])
+            notice['notified'] = True
+            self.store.put_lane(lane)
+
     def resume_parked(self, route, address):
         with self.lane_lock(route):
             lane = self.store.lane(route)
@@ -473,6 +480,7 @@ class Engine:
                 if lane.get('paused') or lane['state'] != 'assigned' or self.stop_requested() or self.clock()+840 >= epoch(lease['expires']): break
                 with self.store.lock('lease-' + lease['claim_id']):
                     self.guard(self.project.call('status', {}), lease['claim_id'])
+                    if self.stop_requested() or self.clock()+840 >= epoch(lease['expires']): break
                     if sha((directory/'pack.tar.gz').read_bytes()) != lease['pack_sha256']: raise ValueError('Original pack changed')
                     digest = sha(raw); key = 'check:' + lease['claim_id'] + ':' + digest
                     previous = self.store.get(key)
@@ -520,6 +528,7 @@ class Engine:
             if self.stop_requested(): return
             if self.clock()+840 >= epoch(lease['expires']): raise RuntimeError('Too close to expiry for independent validation')
             self.guard(self.project.call('status', {}), lease['claim_id'])
+            if self.stop_requested() or self.clock()+840 >= epoch(lease['expires']): return
             if sha((directory/'pack.tar.gz').read_bytes()) != lease['pack_sha256'] or sha(source.read_bytes()) != digest: raise RuntimeError('Finalization inputs changed')
             final_key = 'finalize:' + lease['claim_id']
             if self.store.get(final_key): raise RuntimeError('Existing finalization intent; reconcile rather than replay')
@@ -530,6 +539,7 @@ class Engine:
             if proof['exit_code'] != 0 or proof.get('standalone_match') is not True or proof['source_sha256'] != digest or sha(snapshot.read_bytes()) != digest: raise RuntimeError('Independent plain MATCH not established; no submission')
             if self.stop_requested(): return
             self.guard(self.project.call('status', {}), lease['claim_id'])
+            if self.stop_requested() or self.clock()+840 >= epoch(lease['expires']): return
             if sha((directory/'pack.tar.gz').read_bytes()) != lease['pack_sha256']: raise RuntimeError('Pack changed after plain validation')
             args={'claim_id':lease['claim_id'],'source':snapshot.read_bytes().decode(),'model':self.model_label(lane)}
             self.store.set(final_key, {'state': 'submit_intent', 'source_sha256': digest})
@@ -571,6 +581,13 @@ class Engine:
             lane['state'] = 'resume_pending'
         else:
             lane.pop('resume', None); lane['state'] = 'idle'
+        notices = lane.setdefault('closed_lease_notices', [])
+        if not any(x['payload']['claim_id'] == lease['claim_id'] for x in notices):
+            notices.append({'notified':False, 'payload':{'status':'LEASE_CLOSED', 'claim_id':lease['claim_id'],
+                            'address':lease.get('address'), 'lease_status':status,
+                            'checks_recorded':self.store.get('checks:'+lease['claim_id']) or 0,
+                            'work_preserved':True, 'continuation_pending':bool(lane.get('resume')),
+                            'next_action':dict(NEXT_ACTION)}})
         self.store.put_lane(lane)
         self.store.event('claim_'+status, {'route_token':lane['route_token'], 'claim_id':lease['claim_id']})
         return {'status':status, 'claim_id':lease['claim_id'], 'route_token':lane['route_token']}
@@ -675,6 +692,7 @@ class Engine:
     def poll(self):
         for lane in self.store.lanes():
             if self.stop_requested(): break
+            if self.clock() < (self.store.get('project_read_not_before') or 0): break
             try:
                 self.config = self.store.config()
                 if lane['state']=='claim_intent':
@@ -687,6 +705,7 @@ class Engine:
                 if lease and (self.clock()+600 >= epoch(lease['expires']) or not owner_alive(lease.get('owner'))):
                     self.release(lane,'Controller unavailable or lease near expiry; preserved unfinished work')
                 self.refresh(lane)
+                self.publish_closed_leases(lane)
                 if lane['state'] in ('setup','claim_intent','preparing','closed_requires_reconciliation') or lane.get('paused'): continue
                 for message in self.notion.messages(lane['inbox']):
                     if self.stop_requested(): break
@@ -729,5 +748,7 @@ class Engine:
                 self.refresh(lane)
                 if lane['state'] in ('idle','resume_pending') and not self.stop_requested(): self.assign(lane)
             except Exception as error:
+                if isinstance(error,ProjectError) and not error.uncertain and error.retry_after:
+                    self.store.set('project_read_not_before', self.clock()+max(0,error.retry_after))
                 self.store.event('lane_error',{'route_token':lane['route_token'],'type':type(error).__name__,'message':str(error)[:400]})
                 self.store.set('last_error:'+lane['route_token'],{'type':type(error).__name__,'http_status':getattr(error,'status',None),'message':str(error)[:400]})

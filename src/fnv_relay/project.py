@@ -19,6 +19,7 @@ USER_AGENT = "fnv-relay/" + __version__
 
 READ_TOOLS = frozenset({"status", "list_bands", "function_info", "function_history", "packet"})
 MAX_PACK = 1024 ** 3
+MAX_INLINE_BACKOFF = 30
 
 
 def _origin(url):
@@ -64,6 +65,16 @@ class FNV:
         self._opener = opener or build_opener(_SameOrigin(self._origin)).open
         self._sleep = sleep
         self.timeout = timeout
+        self._stop_wait = None
+
+    def set_stop_event(self, event):
+        self._stop_wait = event.wait if event is not None else None
+
+    def pause(self, delay):
+        if self._stop_wait is not None:
+            if self._stop_wait(delay): raise ProjectError(code="cancelled")
+        else:
+            self._sleep(delay)
 
     def call(self, tool: str, args: dict | None = None):
         if not re.fullmatch(r"[a-z_]+", tool):
@@ -71,6 +82,8 @@ class FNV:
         raw = json.dumps(args or {}, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
         read = tool in READ_TOOLS
         for attempt in range(4):
+            if self._stop_wait is not None and self._stop_wait(0):
+                raise ProjectError(code="cancelled")
             req = Request(self.base + "/api/v1/" + tool, data=raw, method="POST", headers={"User-Agent": USER_AGENT, "Authorization": "Bearer " + self._key, "Content-Type": "application/json"})
             try:
                 with self._opener(req, timeout=self.timeout) as response:
@@ -90,11 +103,14 @@ class FNV:
                 failure = ProjectError(exc.code, delay, not read and (exc.code >= 500 or 300 <= exc.code < 400), code)
                 if not read or exc.code not in {429, 500, 502, 503, 504, 529} or attempt == 3:
                     raise failure from None
-                self._sleep(max(delay or 0, 2 ** attempt))
+                backoff = max(delay or 0, 2 ** attempt)
+                if backoff > MAX_INLINE_BACKOFF:
+                    raise failure from None  # Scheduler waits without retaining lane/lease locks.
+                self.pause(backoff)
             except (URLError, OSError, TimeoutError):
                 if not read or attempt == 3:
                     raise ProjectError(uncertain=not read) from None
-                self._sleep(2 ** attempt)
+                self.pause(2 ** attempt)
             except (ValueError, UnicodeError):
                 raise ProjectError(uncertain=not read, code="invalid_response") from None
         raise AssertionError("unreachable")

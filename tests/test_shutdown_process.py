@@ -19,6 +19,7 @@ store.set_secret('fnv_api_key','synthetic-owner-key')
 store.put_lane({'route_token':'synthetic-lane','state':'assigned','lease':{'claim_id':'synthetic-claim'}})
 class Project:
  def call(self,*a): return {}
+ def set_stop_event(self,event): pass
 class Notion:
  def whoami(self): return {}
 class Engine:

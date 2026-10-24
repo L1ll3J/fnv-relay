@@ -473,3 +473,42 @@ def test_park_notification_readback_retry_does_not_allocate_until_delivered(env,
     assert lane(env)['state']=='assigned' and env.project.claims==2
     notices=[r for r in original(lane(env)['outbox']) if r.get('payload',{}).get('status')=='CONTINUATION_PARKED']
     assert len(notices)==1
+
+
+def test_long_project_backoff_is_scheduled_without_retaining_claim_locks(env,monkeypatch):
+    automatic(env)
+    original=env.project.call
+    def call(tool,args):
+        if tool=='status':raise ProjectError(429,3600,False)
+        return original(tool,args)
+    monkeypatch.setattr(env.project,'call',call)
+    post_batch(env,[candidate(env,'rate-limited','int target(){return 41;}')])
+    env.engine.poll()
+    assert env.store.get('project_read_not_before')==env.project.now+3600
+    with env.engine.lane_lock(env.route),env.store.lock('lease-'+lane(env)['lease']['claim_id']):pass
+    env.engine.poll()
+
+
+def test_closed_lease_notice_is_saved_for_next_controller_and_published_once(env):
+    automatic(env)
+    env.engine.release(lane(env),'Owner shutdown')
+    assert not lane(env)['closed_lease_notices'][0]['notified']
+    env.engine.poll()
+    env.engine.poll()
+    notices=[x['payload'] for x in env.notion.messages(lane(env)['outbox']) if x.get('payload',{}).get('status')=='LEASE_CLOSED']
+    assert len(notices)==1 and notices[0]['lease_status']=='released'
+
+
+def test_shutdown_during_ownership_read_does_not_start_another_check(env,monkeypatch):
+    automatic(env)
+    stopped=[False];env.engine._should_stop=lambda:stopped[0]
+    original=env.project.call
+    def call(tool,args):
+        result=original(tool,args)
+        if tool=='status':stopped[0]=True
+        return result
+    monkeypatch.setattr(env.project,'call',call)
+    post_batch(env,[candidate(env,'stop-during-read','int target(){return 41;}')])
+    env.engine.poll()
+    assert env.checker.calls==[]
+    assert not env.store.get('checks:'+lane(env)['lease']['claim_id'])

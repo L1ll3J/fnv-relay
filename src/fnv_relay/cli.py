@@ -302,7 +302,12 @@ def shutdown_signals(event):
             signum = getattr(signal, name, None)
             if signum is not None:
                 previous[signum] = signal.getsignal(signum)
-                signal.signal(signum, lambda *_: event.set())
+                def request_stop(*_):
+                    if not event.is_set():
+                        try: os.write(2, b"\nStopping safely; finishing the current operation and releasing tracked claims...\n")
+                        except OSError: pass
+                    event.set()
+                signal.signal(signum, request_stop)
         yield
     finally:
         for signum, handler in previous.items():
@@ -359,6 +364,7 @@ def serve(store, once=False, order=None):
     if not isinstance(interval, (int, float)) or not 1 <= interval <= 60:
         raise ValueError("Invalid poll interval")
     event = threading.Event()
+    project.set_stop_event(event)
     with store.lock("serve"), account_lock(store.secrets().get("fnv_api_key", "")):
         if store.pending_operations():
             raise UncertainOperation("Reconciliation required")
@@ -409,6 +415,7 @@ def serve(store, once=False, order=None):
                 event.set()
                 code = 130
             finally:
+                project.set_stop_event(None)
                 store.set("shutdown_requested", True)
                 store.set("drain", True)
                 cleanup_code = release_report(store, engine, "Owner stopped relay; preserve checked work for continuation")

@@ -182,3 +182,9 @@ After bootstrap, run `./relay` from the checkout. It remembers that checkout’s
 Choose **Add lane**, select the task order by number, and copy the printed starter into a new ChatGPT chat with Notion connected. No route UUIDs or command flags need to be entered. **Show a lane’s ChatGPT starter**, **Show status**, and **Resume saved work** also use numbered choices.
 
 **Start relay** runs in the current terminal. Leave it open; Ctrl+C releases tracked claims safely and returns to the menu. To add lanes while it runs, open another terminal, run `./relay` there, and choose **Add lane**. Both menus use the same saved installation. Exiting the second menu leaves the running relay alone.
+
+## Stopping and lease status
+
+The first Ctrl+C prints a stopping acknowledgement and cancels FNV read-retry backoff. An in-flight network request or compiler invocation may still need to finish before cleanup. The controller checks for shutdown again before starting another compiler check. Long service retry delays are deferred without holding the lane’s locks; their deadlines are retained rather than retried early.
+
+A confirmed release or observed expiry saves a `LEASE_CLOSED` notice locally. The controller publishes it to the private outbox with readback, so the web conversation can distinguish an old assignment from current lease state. Cleanup does not depend on Notion being reachable: an undelivered notice is retained for the next controller run. Observed expiry is reported as expiry, never as a successful release.
