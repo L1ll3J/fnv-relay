@@ -34,7 +34,9 @@ def parser():
     root = argparse.ArgumentParser(prog="fnv-relay", description="Local FNV/Notion relay (preview)")
     root.add_argument("--version", action="version", version=__version__)
     root.add_argument("--state-dir", default=DEFAULT_STATE)
-    commands = root.add_subparsers(dest="command", required=True)
+    commands = root.add_subparsers(dest="command")
+    root.set_defaults(command="menu")
+    commands.add_parser("menu", help="Open the interactive numbered menu")
     init = commands.add_parser("init", help="Initialize private local state")
     init.add_argument("--state-dir", default=argparse.SUPPRESS)
     commands.add_parser("setup", help="Guided account and private Notion page setup")
@@ -447,7 +449,12 @@ def stop(store, timeout=15):
 
 
 def run(args, store):
-    if args.command == "init":
+    if args.command == "menu":
+        if not sys.stdin.isatty():
+            raise ValueError("Menu needs an interactive terminal")
+        from . import interactive
+        return interactive.run(store, lambda command: main(["--state-dir",str(store.root),*command]))
+    elif args.command == "init":
         if not (store.root / "config.json").exists():
             store.set_config(store.config())
         print("Private local state initialized.")

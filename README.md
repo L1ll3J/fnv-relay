@@ -28,7 +28,7 @@ python3 -m venv .venv
 .venv/bin/fnv-relay --help
 ```
 
-After [Ubuntu/WSL2 bootstrap](docs/BOOTSTRAP.md), run `fnv-relay setup` to connect your accounts in the browser, choose your Notion workspace, create a private parent page, and optionally create your first lane. Then run `fnv-relay start`.
+After [Ubuntu/WSL2 bootstrap](docs/BOOTSTRAP.md), run **`./relay`** from the checkout to open the numbered menu. Choose **Account setup** to connect accounts if needed, **Add lane** to get a ready-to-paste ChatGPT starter, and **Start relay** to begin work. Lane selection and saved-work recovery use numbered choices; no UUIDs or command flags are required. A normal `fnv-relay` installation also opens the menu when run without a command.
 
 Common commands:
 

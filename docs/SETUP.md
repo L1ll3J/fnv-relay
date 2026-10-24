@@ -174,3 +174,11 @@ For Notion reconnection, stop the relay and run `fnv-relay auth notion connect`.
 Before reclaiming an unfinished function, the relay checks its eligibility with `function_info`. If FNV has paused it for problem-report review, the relay parks its continuation, publishes `CONTINUATION_PARKED` in the outbox, and selects another eligible function using the lane’s configured order. Existing attempts remain on disk, and status shows how many unfinished functions are parked. An older relay state paused for this reason recovers automatically on the next `start`; an owner-requested pause remains paused. Reconnecting cannot remove a project restriction.
 
 List preserved tasks with `fnv-relay lane parked ROUTE`. Once the project reopens one, use `fnv-relay lane resume ROUTE --address ADDRESS`. Finish or release any current claim first; the relay refuses to replace an active claim. Selecting another saved task also preserves the current continuation. It will check eligibility again before claiming, and park the task again if it remains unavailable.
+
+## Interactive menu
+
+After bootstrap, run `./relay` from the checkout. It remembers that checkout’s installation and private state directory. A regular installation also opens the menu when you run `fnv-relay` with no command.
+
+Choose **Add lane**, select the task order by number, and copy the printed starter into a new ChatGPT chat with Notion connected. No route UUIDs or command flags need to be entered. **Show a lane’s ChatGPT starter**, **Show status**, and **Resume saved work** also use numbered choices.
+
+**Start relay** runs in the current terminal. Leave it open; Ctrl+C releases tracked claims safely and returns to the menu. To add lanes while it runs, open another terminal, run `./relay` there, and choose **Add lane**. Both menus use the same saved installation. Exiting the second menu leaves the running relay alone.
