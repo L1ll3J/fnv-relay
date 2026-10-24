@@ -39,6 +39,8 @@ fnv-relay lane resume "My lane"
 fnv-relay status --json          # machine-readable status
 ```
 
+Setup asks for largest first, smallest first, or a random eligible size band and saves the choice. Use `fnv-relay start --order smallest` to change the order for unpaused lanes, or `lane create --order largest` for a particular new lane. Pro/Free suggestions are starting heuristics, not measured model results. Random does not mean a uniformly random function from the whole project.
+
 `start` runs in the foreground. Ctrl+C, SIGTERM and terminal hangup request release and cleanup; allow the current compiler process to finish. An unresolved submission or release is reported as pending, with its reservation retained. Restarting continues an unpaused lane's saved function; manually paused lanes require `lane resume`.
 
 Follow [Setup](docs/SETUP.md) for browser approval with `auth fnv connect`, official downloads with `tools fetch`, the game/toolchain paths, Notion authentication, health checks, and your first lane. [Discord quick start](docs/DISCORD.md) is a short introduction you can share. [Validation and preview boundaries](docs/VALIDATION.md) distinguishes tested behavior from remaining limitations.

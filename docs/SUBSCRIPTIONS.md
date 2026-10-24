@@ -23,6 +23,10 @@ Ordinary Chat is the mode used in our existing web relay setup. It still has its
 
 This capability check needs no FNV claim, game data or model API key. It consumes the web account's ordinary interaction/tool allowance.
 
+## Different ChatGPT and Notion accounts
+
+The controller and web conversation need access to the same private lane pages; their Notion logins need not be identical. You can first try inviting the web account’s Notion user as an editing guest to a dedicated, empty test lane. Test reading, writing and reading back a marker through the actual connector before claiming a function. Guest-page visibility through the connector is not yet validated. Do not share the entire project workspace or connection tokens. If shared guest pages are unavailable through that connector, use a separately configured relay in the web account’s own Notion workspace.
+
 ## Attribution
 
 `ChatGPT Web via Notion` identifies the delivery route without guessing the underlying model. To supply a model name you can confirm in the UI:

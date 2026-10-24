@@ -20,7 +20,7 @@ def test_setup_connects_missing_accounts_verifies_page_and_creates_first_lane(tm
     monkeypatch.setattr(setup, "Notion", Mock(return_value=notion))
     engine.create_lane.return_value = {"landing": LANDING, "route_token": "route"}
     monkeypatch.setattr(setup, "Engine", Mock(return_value=engine))
-    answers = iter([PARENT, "y", "My lane"])
+    answers = iter([PARENT, "largest", "y", "My lane"])
     shown = []
     try:
         setup.wizard(store, ask=lambda prompt: next(answers), hidden=lambda prompt: "notion-secret", show=shown.append)
@@ -48,7 +48,7 @@ def test_setup_reuses_saved_credentials_and_parent_without_creating_lane(tmp_pat
     notion, engine = Mock(), Mock()
     monkeypatch.setattr(setup, "Notion", Mock(return_value=notion))
     monkeypatch.setattr(setup, "Engine", engine)
-    answers = iter(["", "n"])
+    answers = iter(["", "largest", "n"])
     try:
         setup.wizard(store, ask=lambda prompt: next(answers), hidden=lambda prompt: pytest.fail("Should reuse credentials"), show=lambda text: None)
         connect.assert_not_called()

@@ -19,7 +19,7 @@ import time
 import signal
 import threading
 
-from . import __version__, authentication, compiler, presentation, setup, tools
+from . import __version__, authentication, compiler, preferences, presentation, setup, tools
 from .engine import BANDS, Engine
 from .notion import Notion, NotionError, page_id
 from .project import FNV, ProjectError
@@ -57,7 +57,7 @@ def parser():
     create = lane.add_parser("create", help="Create private Notion lane pages")
     create.add_argument("--parent-page", help="Default: parent saved by setup")
     create.add_argument("--auto-resume", action=argparse.BooleanOptionalAction, default=True, help="Continue unfinished function after release when agent activity is recent")
-    create.add_argument("--order", choices=("largest", "smallest"), default="largest")
+    create.add_argument("--order", choices=preferences.ORDERS, help="Default: task order saved during setup")
     create.add_argument("--band", choices=BANDS)
     create.add_argument("--address")
     create.add_argument("--min-bytes", type=int, default=0)
@@ -73,6 +73,7 @@ def parser():
             control.add_argument("--release", action="store_true", help="Also release the current claim, retaining continuation")
     serve = commands.add_parser("serve", aliases=["start"], help="Run live work under your FNV account")
     serve.add_argument("--once", action="store_true")
+    serve.add_argument("--order", choices=preferences.ORDERS, help="Save and apply an order to future tasks in unpaused lanes")
     status = commands.add_parser("status", help="Human-readable local status")
     status.add_argument("--json", action="store_true", help="Stable machine-readable status")
     status.add_argument("--refresh", action="store_true", help="Also fetch read-only FNV account totals")
@@ -225,6 +226,7 @@ def lane_command(store, args):
             engine.resume_lane(lane["route_token"])
             print("Lane resumed. Start the worker if it is stopped.")
     else:
+        if args.order is None: args.order = store.config().get("default_task_order", "largest")
         selected = policy(args)
         parent = page_id(args.parent_page or store.config().get("notion_parent_page", ""))
         project, notion = clients(store)
@@ -289,7 +291,7 @@ def release_report(store, engine, reason):
     return 1 if pending or uncertain else 0
 
 
-def serve(store, once=False):
+def serve(store, once=False, order=None):
     project, notion = clients(store)
     if not all(host_checks(store.config().get("paths", {})).values()):
         raise ValueError("Toolchain or isolation health check failed")
@@ -303,6 +305,14 @@ def serve(store, once=False):
         if store.pending_operations():
             raise UncertainOperation("Reconciliation required")
         engine = Engine(store, project, notion, should_stop=event.is_set)
+        selected,apply_order = preferences.start_order(store,order)
+        if apply_order:
+            for row in store.lanes():
+                if row.get('paused'): continue
+                with engine.lane_lock(row['route_token']):
+                    current=store.lane(row['route_token'])
+                    if current and not current.get('paused'):
+                        current.setdefault('policy',{})['order']=selected; store.put_lane(current)
         store.set("drain", False)
         store.set("shutdown_requested", False)
         for lane in store.lanes():
@@ -384,7 +394,7 @@ def run(args, store):
     elif args.command == "lane":
         lane_command(store, args)
     elif args.command in ("serve", "start"):
-        return serve(store, args.once)
+        return serve(store, args.once, order=args.order)
     elif args.command in ("stop", "shutdown"):
         return stop(store, args.timeout)
     elif args.command == "drain":

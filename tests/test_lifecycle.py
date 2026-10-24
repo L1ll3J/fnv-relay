@@ -362,3 +362,33 @@ def test_unproven_submission_ack_never_frees_slot_or_queues_next(env):
     summary = env.engine.release_all('stop with unknown submit status')
     assert summary['counts']['uncertain'] == 1
     assert not any(tool == 'giveup' for tool,_ in env.project.calls)
+
+
+def test_random_order_shuffles_only_available_eligible_size_bands(env,monkeypatch):
+    from fnv_relay import engine as module
+    current=lane(env); current['policy']={'order':'random','min_bytes':256,'max_bytes':4096}
+    rows=[{'band':'<=255','allowed':True,'open':10},
+          {'band':'256-511','allowed':True,'open':3,'reserved_for_new':3},
+          {'band':'512-1K','allowed':True,'open':4},
+          {'band':'1K-4K','allowed':True,'open':4},
+          {'band':'4K+','allowed':True,'open':10}]
+    original=env.project.call
+    monkeypatch.setattr(env.project,'call',lambda tool,args:{'bands':rows} if tool=='list_bands' else original(tool,args))
+    shuffled=[]
+    def reverse(values):
+        shuffled.append(list(values)); values.reverse()
+    monkeypatch.setattr(module.random,'shuffle',reverse)
+    status=original('status',{})
+    assert env.engine.select(current,status)=={'band':'1K-4K','prefer':'any','context_mode':'resume'}
+    assert shuffled==[['512-1K','1K-4K']]
+    rows[3]['allowed']=False
+    assert env.engine.select(current,status)['band']=='512-1K'
+    assert shuffled[-1]==['512-1K']
+    assert env.project.claims==0
+
+
+def test_invalid_task_order_still_rejected_without_allocating(env):
+    current=lane(env); current['policy']={'order':'uniform-over-all-functions'}
+    with pytest.raises(ValueError,match='Unsupported selection order'):
+        env.engine.select(current,env.project.call('status',{}))
+    assert env.project.claims==0

@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import random
 import subprocess
 import sys
 import tarfile
@@ -152,11 +153,16 @@ class Engine:
         if policy.get('address'): return {'address': policy['address'], 'context_mode': 'resume'}
         # The project exposes bands, not a globally ranked list of open addresses.
         available = {r['band']: r for r in self.project.call('list_bands', {})['bands']}
-        if policy.get('order', 'largest') not in ('largest', 'smallest'): raise ValueError('Unsupported selection order')
+        order = policy.get('order', 'largest')
+        if order not in ('largest', 'smallest', 'random'): raise ValueError('Unsupported selection order')
         choices = [policy['band']] if policy.get('band') else list(BANDS)
         bounds = [(0,255),(256,511),(512,1024),(1025,4096),(4097,2**31)]
         choices = [b for b in choices if bounds[BANDS.index(b)][1] >= policy.get('min_bytes',0) and bounds[BANDS.index(b)][0] <= policy.get('max_bytes',2**31)]
-        if policy.get('order', 'largest') != 'smallest': choices.reverse()
+        if order == 'random':
+            # Random band priority; the API chooses a function within the band.
+            choices = [b for b in choices if available.get(b, {}).get('allowed') and available[b].get('open', 0) > available[b].get('reserved_for_new', 0)]
+            random.shuffle(choices)
+        elif order == 'largest': choices.reverse()
         for b in choices:
             row = available.get(b, {})
             if row.get('allowed') and row.get('open', 0) > row.get('reserved_for_new', 0): return {'band': b, 'prefer': 'any', 'context_mode': 'resume'}

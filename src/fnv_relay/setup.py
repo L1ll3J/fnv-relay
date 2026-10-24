@@ -4,7 +4,7 @@ from __future__ import annotations
 import getpass
 import sys
 
-from . import authentication
+from . import authentication, preferences
 from .engine import Engine
 from .notion import Notion, page_id
 from .presentation import starter_prompt
@@ -48,13 +48,14 @@ def wizard(store, *, ask=None, hidden=None, show=print):
         with store.lock("config"):
             store.set_config(config)
         show("Private parent verified and saved.")
+        order = preferences.choose_order(store, ask=ask, show=show)
         lanes = store.lanes()
         create = ask("Create " + ("another" if lanes else "your first") + " lane now? [Y/n]: ").strip().lower()
         if create in ("", "y", "yes"):
             label = ask("Lane label [My lane]: ").strip() or "My lane"
             if len(label) > 100 or any(ord(c) < 32 for c in label):
                 raise ValueError("Invalid label")
-            lane = Engine(store, project, notion).create_lane(parent, {"order": "largest", "auto_resume_unfinished": True, "model_label": "ChatGPT Web via Notion"}, label)
+            lane = Engine(store, project, notion).create_lane(parent, {"order": order, "auto_resume_unfinished": True, "model_label": "ChatGPT Web via Notion"}, label)
             show("Paste this starter into a ChatGPT conversation with Notion access:")
             show(starter_prompt(lane))
         elif create not in ("n", "no"):
