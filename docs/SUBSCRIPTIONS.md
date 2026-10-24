@@ -16,7 +16,7 @@ Ordinary Chat is the mode used in our existing web relay setup. It still has its
 
 ## Test an account before claiming work
 
-1. Manually open ChatGPT **Settings → Integrations → Plugins → Browse directory**, search **Notion**, sign in/sign up and connect it. Then choose **Manage → Permission → Allow all tools**. The CLI cannot do this for you. Use a private test page in that Notion workspace.
+1. Manually open ChatGPT **Settings → Integrations → Plugins → Browse directory**, search **Notion**, sign in/sign up and connect it. No action in Notion is needed yet. Then, in ChatGPT (not Notion), choose **Settings → Integrations → Plugins → Notion → Allow all tools**. The CLI cannot do this for you. Use a private test page in that Notion workspace.
 2. In the conversation mode you intend to use, ask ChatGPT to read that page, append a harmless unique test marker, and read the marker back using its Notion tools.
 3. Open the page yourself and confirm that the marker really exists. A message in the chat saying it wrote something is not the test result.
 4. If both reading and writing work, proceed with the setup wizard and one small lane. If only search/read tools are available, the unattended candidate/result workflow cannot work on that account yet.

@@ -4,7 +4,7 @@ This is a 0.2 preview for Ubuntu/Linux, including Ubuntu under WSL2. Python 3.11
 
 ## First connect Notion inside ChatGPT
 
-In ChatGPT, open **Settings → Integrations → Plugins → Browse directory**, search for **Notion**, sign in or sign up, and connect it. Then open **Manage → Permission → Allow all tools**. Use the Notion account/workspace you will use for the relay. These are manual ChatGPT steps; the CLI cannot perform or authorize them for you.
+In ChatGPT, open **Settings → Integrations → Plugins → Browse directory**, search for **Notion**, sign in or sign up, and connect it. No action in Notion is needed yet. Then, in ChatGPT (not Notion), open **Settings → Integrations → Plugins → Notion → Allow all tools**. Use the Notion account/workspace you will use for the relay. These are manual ChatGPT steps; the CLI cannot perform or authorize them for you.
 
 ## Guided account setup after bootstrap
 

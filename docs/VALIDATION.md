@@ -14,7 +14,7 @@ The standalone Notion browser-OAuth transport and advanced internal-token fallba
 
 Current boundaries:
 
-- ChatGPT Notion authorization is a manual prerequisite: Settings → Integrations → Plugins → Browse directory → Notion → connect, then Manage → Permission → Allow all tools. The setup acknowledgement is not an access test; confirm actual read/write/readback before claiming. CLI OAuth is a separate grant.
+- ChatGPT Notion authorization is a manual prerequisite: Settings → Integrations → Plugins → Browse directory → Notion → connect, then (in ChatGPT, not Notion) Settings → Integrations → Plugins → Notion → Allow all tools. No action in Notion is needed before CLI setup. The setup acknowledgement is not an access test; confirm actual read/write/readback before claiming. CLI OAuth is a separate grant.
 - Linux/WSL2 only; no native Windows support claim.
 - Compiler checks run sequentially. Each claim has an independent ordinary-code expiry guardian.
 - Selection orders available size bands; it does not have a global ranking of every open function. A size-filter miss releases the claim and pauses admissions for that unchanged lane policy rather than repeatedly claiming unsuitable functions.
@@ -34,3 +34,5 @@ The expanded offline suite passes 157 tests. It covers safe release and same-add
 `stop` now releases tracked claims rather than only draining. Use `drain` to finish existing tasks. Human-readable `status` is the default; scripts should use `status --json`. Same-function continuation does not renew a lease: it releases, respects project availability/cooldowns, then obtains a fresh assignment. Following accepted submission, one next-task admission is permitted without waiting for verification; no receipt is called a verified contribution.
 
 Catchable exits perform cleanup; an independent guardian can release after abrupt controller death while the computer stays online. Power loss or unavailable project networking can prevent release. Pending/uncertain operations are explicitly retained and never reported as successfully released. Best sources larger than the relay's conservative 64 KiB near-miss upload ceiling remain local rather than being discarded or truncated.
+
+The owner completed the public CLI browser authorization successfully during the newcomer trial on 2026-10-24, including private parent/lane creation and local readback. This validates that connection path on that account and WSL2 host; it does not yet prove a complete Free ChatGPT solve or server-verified submission.

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import getpass
+from pathlib import Path
 import sys
 
 from . import authentication, connections, preferences
@@ -20,9 +21,15 @@ def chatgpt_connection_step(store, *, ask=None, show=print):
         raise ValueError("ChatGPT connection setup needs an interactive terminal")
     ask = ask or input
     show("First, connect Notion manually in the ChatGPT account that will solve functions:")
-    show("Account > Settings > Integrations > Plugins > Browse directory > search Notion.")
-    show("Connect and sign in or create your Notion account. Then open Manage > Permission > Allow all tools.")
+    show("")
+    show("In ChatGPT: Account > Settings > Integrations > Plugins > Browse directory > search Notion.")
+    show("")
+    show("Connect and sign in or create your Notion account. You do not need to do anything in Notion yet.")
+    show("")
+    show("Then, in ChatGPT (not Notion): Settings > Integrations > Plugins > Notion > Allow all tools.")
+    show("")
     show("Next, this CLI will ask you to authorize the same Notion account/workspace in your browser.")
+    show("")
     ask("Press Enter when the ChatGPT Notion connection and tool permissions are ready: ")
     store.set("chatgpt_notion_setup_ack", True)
     show("Setup acknowledged. We will still verify actual read/write access before claiming work.")
@@ -56,7 +63,7 @@ def wizard(store, *, ask=None, hidden=None, show=print):
         previous = config.get("notion_parent_page")
         browser_connection = config.get("notion_transport") == "mcp"
         if browser_connection and not previous:
-            entered = ask("Parent page URL [Enter creates a private FNV Relay page]: ").strip()
+            entered = ask("Press Enter to create your private FNV Relay page (recommended), or paste an existing page URL: ").strip()
             if entered:
                 parent = page_id(entered)
             else:
@@ -80,19 +87,32 @@ def wizard(store, *, ask=None, hidden=None, show=print):
         lanes = store.lanes()
         create = ask("Create " + ("another" if lanes else "your first") + " lane now? [Y/n]: ").strip().lower()
         if create in ("", "y", "yes"):
-            label = ask("Lane label [My lane]: ").strip() or "My lane"
-            if len(label) > 100 or any(ord(c) < 32 for c in label):
-                raise ValueError("Invalid label")
+            label = "Lane " + str(len(lanes) + 1)
             lane = Engine(store, project, notion).create_lane(parent, {"order": order, "auto_resume_unfinished": True, "model_label": "ChatGPT Web via Notion"}, label)
-            show("Paste this starter into a ChatGPT conversation with Notion access:")
+            show("")
+            show("Copy the text between the markers into your ChatGPT conversation:")
+            show("")
+            show("----- BEGIN CHATGPT PROMPT -----")
             show(starter_prompt(lane))
+            show("----- END CHATGPT PROMPT -----")
+            show("")
         elif create not in ("n", "no"):
             raise ValueError("Please answer yes or no")
     state = str(store.root)
     import shlex
-    prefix = "fnv-relay --state-dir " + shlex.quote(state)
-    show("Next: " + prefix + " doctor")
-    show("Start: " + prefix + " start")
-    show("Inspect: " + prefix + " status")
-    show("Exit safely: " + prefix + " stop")
-    show("Setup is saved. Readiness still depends on doctor and the official checker image/version checks.")
+    executable = Path(sys.executable).with_name("fnv-relay")
+    command = str(executable) if executable.is_file() else "fnv-relay"
+    prefix = shlex.quote(command) + " --state-dir " + shlex.quote(state)
+    show("Setup saved. Back in this terminal:")
+    show("")
+    show("Check readiness:")
+    show("  " + prefix + " doctor")
+    show("")
+    show("Start the relay:")
+    show("  " + prefix + " start")
+    show("")
+    show("While it is running, use another terminal to inspect or stop it:")
+    show("  " + prefix + " status")
+    show("  " + prefix + " stop")
+    show("")
+    show("Start only after the readiness checks pass.")

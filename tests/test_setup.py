@@ -22,7 +22,7 @@ def test_setup_connects_missing_accounts_verifies_page_and_creates_first_lane(tm
     monkeypatch.setattr(setup, "Notion", Mock(return_value=notion))
     engine.create_lane.return_value = {"landing": LANDING, "route_token": "route"}
     monkeypatch.setattr(setup, "Engine", Mock(return_value=engine))
-    answers = iter([PARENT, "largest", "y", "My lane"])
+    answers = iter([PARENT, "largest", "y"])
     shown = []
     try:
         setup.wizard(store, ask=lambda prompt: next(answers), hidden=lambda prompt: "notion-secret", show=shown.append)
@@ -30,7 +30,7 @@ def test_setup_connects_missing_accounts_verifies_page_and_creates_first_lane(tm
         notion.page.assert_called_once_with(PARENT)
         assert store.config()["notion_parent_page"] == PARENT
         assert store.secrets()["notion_token"] == "notion-secret"
-        engine.create_lane.assert_called_once_with(PARENT, {"order": "largest", "auto_resume_unfinished": True, "model_label": "ChatGPT Web via Notion"}, "My lane")
+        engine.create_lane.assert_called_once_with(PARENT, {"order": "largest", "auto_resume_unfinished": True, "model_label": "ChatGPT Web via Notion"}, "Lane 1")
         text = "\n".join(shown)
         assert "fnv-secret" not in text and "notion-secret" not in text
         assert "Welcome samurai o7" in text and " start" in text and " stop" in text

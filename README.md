@@ -10,7 +10,7 @@ You need Python 3.11.8+, Wine, a supported Linux sandbox environment, a legitima
 
 ## Start here
 
-First connect Notion inside the ChatGPT account you will use: **Settings → Integrations → Plugins → Browse directory → search Notion → sign in/sign up → connect → Manage → Permission → Allow all tools**. Complete this manually before CLI browser authorization.
+First connect Notion inside the ChatGPT account you will use: **Settings → Integrations → Plugins → Browse directory → search Notion → sign in/sign up → connect**. No action in Notion is needed yet. Back in ChatGPT, open **Settings → Integrations → Plugins → Notion → Allow all tools**. Complete this manually before CLI browser authorization.
 
 On Ubuntu 24.04 x86_64 (including WSL2), the [bootstrap script](docs/BOOTSTRAP.md) installs Wine, extracts Microsoft's original compiler, and sets up the relay. Supply your own game:
 

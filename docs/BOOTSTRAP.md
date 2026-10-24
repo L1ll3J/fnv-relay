@@ -26,7 +26,7 @@ This repository ships code only. The Microsoft compiler/ISO, checker downloads a
 
 ## Finish guided setup
 
-First, in ChatGPT, complete **Settings → Integrations → Plugins → Browse directory → search Notion → sign in/sign up → connect → Manage → Permission → Allow all tools**. This is manual and authorizes ChatGPT, not the local CLI.
+First, in ChatGPT, complete **Settings → Integrations → Plugins → Browse directory → search Notion → sign in/sign up → connect**. No action in Notion is needed yet. Back in ChatGPT, open **Settings → Integrations → Plugins → Notion → Allow all tools**. This is manual and authorizes ChatGPT, not the local CLI.
 
 Run the guided account/page setup. It reuses the FNV key created by bootstrap, opens Notion browser authorization for a fresh installation, lets you choose your own workspace, creates a private relay parent by default, and can create your first lane. No developer integration or API token is needed for that default flow:
 

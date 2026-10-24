@@ -6,7 +6,7 @@ Your web agent writes candidates in Notion. The relay on your machine checks the
 
 You need Ubuntu/Linux (Ubuntu WSL2 is the initial target), Python 3.11.8+, Wine and working Linux isolation, your own legitimate PC game copy, the official checker/compiler files, an FNV key, and a Notion workspace. Native Windows support has not been verified. The package does not include game files, compiler binaries, or private project context.
 
-First connect Notion manually in ChatGPT: **Settings → Integrations → Plugins → Browse directory → search Notion → sign in/sign up → connect → Manage → Permission → Allow all tools**. Use the workspace you intend to use for the relay.
+First connect Notion manually in ChatGPT: **Settings → Integrations → Plugins → Browse directory → search Notion → sign in/sign up → connect**. No action in Notion is needed yet. Back in ChatGPT, open **Settings → Integrations → Plugins → Notion → Allow all tools**. Use the workspace you intend to use for the relay.
 
 1. Extract the package or open your checkout, then install:
 

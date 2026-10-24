@@ -9,13 +9,13 @@ def choose_order(store, *, ask=None, show=print):
     current = store.config().get('default_task_order', 'largest')
     if current not in ORDERS:
         current = 'largest'
-    show('Choose future task order:')
+    show('Choose task order:')
     show('  1. Largest first — suggested for Pro/deep reasoning')
-    show('  2. Smallest first — suggested for Free/lighter models, if Notion tools are available')
+    show('  2. Smallest first — suggested for Free/lighter models')
     show('  3. Random eligible size band')
-    show('These are starting heuristics, not measured guarantees about subscription tiers.')
     while True:
-        value = ask('Task order ['+current+']: ').strip().lower() or current
+        default_number = str(ORDERS.index(current) + 1)
+        value = ask('Enter 1, 2 or 3 [Enter = '+default_number+']: ').strip().lower() or current
         selected = {'1':'largest','2':'smallest','3':'random'}.get(value,value)
         if selected in ORDERS:
             with store.lock('config'):

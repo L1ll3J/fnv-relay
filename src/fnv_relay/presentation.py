@@ -17,9 +17,14 @@ def clean(value, limit=80):
 
 def starter_prompt(lane):
     url = "https://www.notion.so/" + page_id(lane["landing"]).replace("-", "")
-    return ("Welcome samurai o7. Read " + url + ".\n"
-            "Register using the exact HELLO record on that landing page for route " + lane["route_token"] + ".\n"
-            "Read future assignments and results from its outbox. Follow the current assignment's schemas and scope. Keep original context private and use Notion for candidates and messages; the local controller checks and submits. Never request or post credentials. After a completed task or accepted submission, continue checking the outbox for the next assignment; do not treat submission as the end of the lane. If you cannot access the pages, tell your human.")
+    return ("Welcome samurai o7.\n\n"
+            "Open this Notion landing page:\n" + url + "\n\n"
+            "Register using its exact HELLO record for route:\n" + lane["route_token"] + "\n\n"
+            "Read assignments and results from the lane's outbox. Follow each assignment's schemas and scope. "
+            "Post candidates and messages through Notion; the local relay compiles, checks and submits them.\n\n"
+            "After completing a task, keep checking the outbox for the next assignment. "
+            "Keep original project context private and never request or post credentials. "
+            "If page access fails, report the problem in this chat.")
 
 
 def resolve_lane(store, value):
