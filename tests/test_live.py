@@ -1,22 +1,30 @@
-"""Read-only live monitor tests using local state and synthetic events."""
-from fnv_relay.live import watch,event_lines
+"""Compact read-only live monitoring and saved-best comparison regressions."""
+import json
+from fnv_relay.live import watch
+from fnv_relay.live_best import BestTracker
 from fnv_relay.store import Store
 
 
 def fixture_store(tmp_path):
     store=Store(tmp_path)
     store.put_lane({'route_token':'route','label':'Pro1','state':'assigned','policy':{},
-                    'lease':{'claim_id':'claim-1','address':'0x401000','size':41,'expires':'2026-10-24T23:00:00Z'}})
+                    'lease':{'claim_id':'claim-1','pack_sha256':'pack-A','address':'0x401000','size':41,'expires':'2026-10-24T23:00:00Z'}})
     return store
 
 
-def test_live_view_shows_instruction_counts_diagnostics_and_controller_errors(tmp_path):
-    store=fixture_store(tmp_path);shown=[];polls=[0];read=[]
+def saved_best(store,score=12,metric='ndiff_insn',pack='pack-A'):
+    directory=store.root/'claims'/'old-claim';directory.mkdir(parents=True,exist_ok=True)
+    (directory/'checked-best.json').write_text(json.dumps({'source_sha256':'saved','actually_checked':True,'pack_sha256':pack,'rank':[score,0]}))
+    store.set('check:old-claim:saved',{'state':'complete','result':{'pack_sha256':pack,'checker':{metric:score}}})
+
+
+def test_live_view_keeps_tables_and_errors_without_instruction_dumps(tmp_path):
+    store=fixture_store(tmp_path);shown=[];polls=[0];read=[];saved_best(store,12)
     def wait(timeout):
         polls[0]+=1
         if polls[0]==1:
             store.set('checks:claim-1',1)
-            store.set('check:claim-1:hash',{'state':'complete','result':{'candidate_id':'candidate-A','status':'wip',
+            store.set('check:claim-1:hash',{'state':'complete','result':{'candidate_id':'candidate-A','status':'wip','pack_sha256':'pack-A',
                 'checker':{'ndiff_insn':7,'diffs':900,'extent':36,'errors':['compiled extent differs'],
                            'diff':'ORIG mov eax, ecx\nYOURS lea eax, [ecx]'}}})
             store.event('check_complete',{'claim_id':'claim-1','source_sha256':'hash','status':'wip'})
@@ -26,12 +34,11 @@ def test_live_view_shows_instruction_counts_diagnostics_and_controller_errors(tm
     before=store.lane('route')
     watch(store,shown.append,worker_alive=lambda:True,wait=wait,read_line=lambda:read.append(True))
     text='\n'.join(shown)
-    assert 'instruction differences: 7' in text and 'differences: 900' not in text
-    assert 'bytes: 36' in text and 'compiled extent differs' in text
-    assert 'ORIG mov eax, ecx' in text and 'YOURS lea eax, [ecx]' in text
-    assert 'ERROR NotionError: HTTP 405' in text
-    assert read==[True] and store.lane('route')==before
-    assert store.pending_operations()==[]
+    assert 'CHECKS' in text and 'BEST' in text
+    assert 'NEW BEST: 12 → 7 (5 fewer instruction differences)' in text
+    assert '900' not in text and 'ORIG mov' not in text and 'YOURS lea' not in text
+    assert 'compiled extent differs' in text and 'ERROR NotionError: HTTP 405' in text
+    assert read==[True] and store.lane('route')==before and store.pending_operations()==[]
     store.close()
 
 
@@ -40,9 +47,8 @@ def test_live_view_marks_cached_errors_as_past_records_and_enter_is_read_only(tm
     store.set('last_error:route',{'type':'AttributeError','message':'old error'})
     before=store.lanes()
     watch(store,shown.append,worker_alive=lambda:True,wait=lambda _:True,read_line=lambda:'\n')
-    text='\n'.join(shown)
-    assert 'Last recorded error (may be historical)' in text
-    assert 'last error: AttributeError' in text
+    assert 'Last recorded error (may be historical)' in '\n'.join(shown)
+    assert 'last error: AttributeError' in '\n'.join(shown)
     assert store.lanes()==before
     store.close()
 
@@ -64,24 +70,56 @@ def test_event_cursor_does_not_drop_bursts_larger_than_one_page(tmp_path):
     store.close()
 
 
-
-def test_opening_live_view_includes_latest_current_claim_result(tmp_path):
-    store=fixture_store(tmp_path);shown=[]
-    store.set('check:claim-1:hash',{'state':'complete','result':{'candidate_id':'saved','status':'wip','checker':{'ndiff_insn':12}}})
-    store.event('check_complete',{'claim_id':'claim-1','source_sha256':'hash','status':'wip'})
+def test_opening_view_does_not_reannounce_existing_best(tmp_path):
+    store=fixture_store(tmp_path);shown=[];saved_best(store,12)
+    store.event('check_complete',{'claim_id':'old-claim','source_sha256':'saved','status':'wip'})
     watch(store,shown.append,worker_alive=lambda:False)
-    assert 'Latest recorded check:' in '\n'.join(shown)
-    assert 'instruction differences: 12' in '\n'.join(shown)
+    assert 'NEW BEST' not in '\n'.join(shown)
     store.close()
 
 
-def test_completion_during_initial_summary_is_not_displayed_twice(tmp_path,monkeypatch):
-    store=fixture_store(tmp_path);shown=[];original=store.events
-    def arriving(limit):
-        store.set('check:claim-1:hash',{'state':'complete','result':{'candidate_id':'during-open','status':'wip','checker':{'ndiff_insn':3}}})
-        store.event('check_complete',{'claim_id':'claim-1','source_sha256':'hash','status':'wip'})
-        return original(limit)
-    monkeypatch.setattr(store,'events',arriving)
+def test_multiple_improvements_in_one_poll_compare_in_order(tmp_path):
+    store=fixture_store(tmp_path);shown=[];saved_best(store,12);first=[True]
+    original=store.events_after
+    def arriving(cursor):
+        if first[0]:
+            first[0]=False
+            for score in (9,7,7,10,6):
+                digest='score-'+str(score)
+                store.set('check:claim-1:'+digest,{'state':'complete','result':{'pack_sha256':'pack-A','checker':{'ndiff_insn':score}}})
+                store.event('check_complete',{'claim_id':'claim-1','source_sha256':digest,'status':'wip'})
+        return original(cursor)
+    store.events_after=arriving
     watch(store,shown.append,worker_alive=lambda:True,wait=lambda _:True,read_line=lambda:'\n')
-    assert '\n'.join(shown).count('instruction differences: 3')==1
+    notices=[s for s in shown if 'NEW BEST' in s]
+    assert len(notices)==3
+    assert '12 → 9' in notices[0] and '9 → 7' in notices[1] and '7 → 6' in notices[2]
+    store.close()
+
+
+def test_saved_best_comparisons_require_same_pack_and_metric(tmp_path):
+    store=fixture_store(tmp_path);saved_best(store,12,metric='full_extent_ndiff_insn')
+    tracker=BestTracker(store)
+    assert tracker.observe('claim-1',{'pack_sha256':'pack-A','checker':{'ndiff_insn':7}}) is None
+    assert tracker.observe('claim-1',{'pack_sha256':'pack-B','checker':{'full_extent_ndiff_insn':1}}) is None
+    assert tracker.observe('claim-1',{'pack_sha256':'pack-A','checker':{'full_extent_ndiff_insn':10}})==(12,10,'full_extent_ndiff_insn')
+    store.close()
+
+
+def test_imported_historical_named_metrics_are_compared_separately(tmp_path):
+    store=fixture_store(tmp_path)
+    directory=store.root/'claims'/'legacy';directory.mkdir(parents=True)
+    (directory/'checked-best.json').write_text(json.dumps({'actually_checked':True,'pack_sha256':'pack-A','source_sha256':'saved',
+        'historical_metrics':{'full_extent_ndiff_insn':132,'official_ndiff_insn':4528}}))
+    tracker=BestTracker(store)
+    assert tracker.observe('claim-1',{'pack_sha256':'pack-A','checker':{'ndiff_insn':4257}})==(4528,4257,'ndiff_insn')
+    assert tracker.observe('claim-1',{'pack_sha256':'pack-A','checker':{'full_extent_ndiff_insn':130}})==(132,130,'full_extent_ndiff_insn')
+    store.close()
+
+
+def test_unnamed_saved_rank_is_not_guessed_to_be_a_comparable_metric(tmp_path):
+    store=fixture_store(tmp_path);directory=store.root/'claims'/'unknown';directory.mkdir(parents=True)
+    (directory/'checked-best.json').write_text(json.dumps({'actually_checked':True,'pack_sha256':'pack-A','source_sha256':'saved','rank':[132,0]}))
+    tracker=BestTracker(store)
+    assert tracker.observe('claim-1',{'pack_sha256':'pack-A','checker':{'ndiff_insn':120}}) is None
     store.close()

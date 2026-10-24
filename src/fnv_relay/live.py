@@ -4,9 +4,10 @@ import select
 import sys
 
 from . import __version__, presentation
+from .live_best import BestTracker
 
 
-def event_lines(store, event, labels):
+def event_lines(store, event, labels, best=None):
     data=event['data']; kind=event['kind']
     if not isinstance(data,dict):return []
     when=datetime.fromtimestamp(event['created'],timezone.utc).strftime('%H:%M:%S UTC')
@@ -19,20 +20,18 @@ def event_lines(store, event, labels):
         result=result if isinstance(result,dict) else {}
         checker=result.get('checker') or {}
         checker=checker if isinstance(checker,dict) else {}
-        score=checker.get('ndiff_insn'); extent=checker.get('extent')
         errors=checker.get('errors',[])
         errors=errors if isinstance(errors,list) else [errors]
-        lines=[prefix+' | '+presentation.clean(result.get('candidate_id',data['source_sha256'][:12]))
-               +' | '+presentation.clean(result.get('status',data.get('status')))
-               +' | instruction differences: '+presentation.clean(score)
-               +' | bytes: '+presentation.clean(extent)+' | errors: '+str(len(errors))]
-        lines.extend('  '+presentation.clean(error,400) for error in errors[:3])
-        if len(errors)>3:lines.append('  '+str(len(errors)-3)+' more diagnostics are saved with this result.')
-        diff=checker.get('diff','')
-        if isinstance(diff,str):
-            changed=[line for line in diff.splitlines() if line.lstrip().startswith(('ORIG','YOURS'))]
-            lines.extend('  '+presentation.clean(line,240) for line in changed[:6])
-            if len(changed)>6:lines.append('  Additional instruction differences are saved with this result.')
+        lines=[]
+        improved=best.observe(data['claim_id'],result) if best is not None else None
+        if improved:
+            old,new,metric=improved
+            description='full-span instruction differences' if metric=='full_extent_ndiff_insn' else 'instruction differences'
+            lines.append(prefix+' | NEW BEST: '+str(old)+' → '+str(new)+' ('+str(old-new)+' fewer '+description+')')
+        if errors:
+            lines.append(prefix+' | '+presentation.clean(result.get('candidate_id',data['source_sha256'][:12]))+' | checker errors: '+str(len(errors)))
+            lines.extend('  '+presentation.clean(error,400) for error in errors[:3])
+            if len(errors)>3:lines.append('  '+str(len(errors)-3)+' more diagnostics are saved with this result.')
         return lines
     if kind=='lane_error':
         return [prefix+' | ERROR '+presentation.clean(data.get('type'))+': '+presentation.clean(data.get('message'),400)]
@@ -45,7 +44,7 @@ def watch(store, show=print, *, worker_alive, wait=None, read_line=None):
     wait=wait or (lambda timeout:bool(select.select([sys.stdin],[],[],timeout)[0]))
     read_line=read_line or sys.stdin.readline
     cursor=store.db.execute('SELECT COALESCE(MAX(id),0) FROM events').fetchone()[0]
-    labels={};previous=None
+    labels={};previous=None;best=BestTracker(store)
     show('\nLive updates — press Enter to return to the menu. The worker will keep running.')
     show('Times are UTC. Instruction counts are the official checker metric; displayed errors are checker diagnostics.')
     active_claims=set()
@@ -58,13 +57,6 @@ def watch(store, show=print, *, worker_alive, wait=None, read_line=None):
         if error:
             show('Last recorded error (may be historical) — '+presentation.clean(lane.get('label','Lane'))+': '
                  +presentation.clean(error.get('type'))+' — '+presentation.clean(error.get('message'),400))
-    latest={}
-    for event in store.events(200):
-        if event['id'] <= cursor and event['kind']=='check_complete' and event['data'].get('claim_id') in active_claims:
-            latest[event['data']['claim_id']]=event
-    for event in latest.values():
-        show('Latest recorded check:')
-        for line in event_lines(store,event,labels):show(line)
     while True:
         snapshot=presentation.snapshot(store,__version__)
         for lane in snapshot['lanes']:
@@ -74,7 +66,7 @@ def watch(store, show=print, *, worker_alive, wait=None, read_line=None):
         if current!=previous:
             show(current);previous=current
         for event in store.events_after(cursor):
-            for line in event_lines(store,event,labels):show(line)
+            for line in event_lines(store,event,labels,best):show(line)
             cursor=event['id']
         if not worker_alive():
             show('Worker is stopped. Use Start relay or Show recent worker output from the menu.')
