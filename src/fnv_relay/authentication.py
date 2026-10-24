@@ -9,7 +9,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urlsplit
 from urllib.request import Request, build_opener
 
-from .project import FNV, _SameOrigin, _origin
+from .project import FNV, USER_AGENT, _SameOrigin, _origin
 
 BASE = "https://fnvdecomp.com"
 
@@ -24,7 +24,7 @@ def connect(store, label="fnv-relay", *, opener=None, sleep=time.sleep, clock=ti
     opener = opener or build_opener(_SameOrigin(_origin(BASE))).open
 
     def request(path, body, timeout=30):
-        req = Request(BASE + path, data=json.dumps(body).encode(), method="POST", headers={"Content-Type": "application/json"})
+        req = Request(BASE + path, data=json.dumps(body).encode(), method="POST", headers={"User-Agent": USER_AGENT, "Content-Type": "application/json"})
         with opener(req, timeout=timeout) as response:
             # Bound responses before parsing; a connection record is tiny.
             raw = response.read(65537)
@@ -38,6 +38,8 @@ def connect(store, label="fnv-relay", *, opener=None, sleep=time.sleep, clock=ti
     # Creating an approval is a mutation: never automatically repeat it.
     try:
         initial = request("/api/v1/connect", {"agent_label": label.strip()})
+    except HTTPError as exc:
+        raise ConnectionError(f"Approval request failed (HTTP {exc.code}); it was not automatically retried.") from None
     except Exception:
         raise ConnectionError("Approval request failed; it was not automatically retried.") from None
     try:

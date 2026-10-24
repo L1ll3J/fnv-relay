@@ -9,7 +9,7 @@ from urllib.request import Request
 
 import pytest
 
-from fnv_relay.project import FNV, ProjectError, _SameOrigin
+from fnv_relay.project import FNV, ProjectError, USER_AGENT, _SameOrigin
 from fnv_relay.store import AlreadyRunning, Store, UncertainOperation, read_json, write_json
 
 
@@ -30,6 +30,7 @@ class Server:
         self.sleeps = []
 
     def __call__(self, request, timeout):
+        assert request.get_header("User-agent") == USER_AGENT
         self.calls.append(request)
         result = self.results.pop(0)
         if isinstance(result, Exception):

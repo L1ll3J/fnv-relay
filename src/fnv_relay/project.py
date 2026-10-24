@@ -12,7 +12,10 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from . import __version__
 from .notion import _retry_after
+
+USER_AGENT = "fnv-relay/" + __version__
 
 READ_TOOLS = frozenset({"status", "list_bands", "function_history", "packet"})
 MAX_PACK = 1024 ** 3
@@ -68,7 +71,7 @@ class FNV:
         raw = json.dumps(args or {}, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
         read = tool in READ_TOOLS
         for attempt in range(4):
-            req = Request(self.base + "/api/v1/" + tool, data=raw, method="POST", headers={"Authorization": "Bearer " + self._key, "Content-Type": "application/json"})
+            req = Request(self.base + "/api/v1/" + tool, data=raw, method="POST", headers={"User-Agent": USER_AGENT, "Authorization": "Bearer " + self._key, "Content-Type": "application/json"})
             try:
                 with self._opener(req, timeout=self.timeout) as response:
                     return json.load(response)
@@ -105,7 +108,7 @@ class FNV:
         temporary = None
         digest = hashlib.sha256()
         try:
-            req = Request(url, headers={"Authorization": "Bearer " + self._key})
+            req = Request(url, headers={"User-Agent": USER_AGENT, "Authorization": "Bearer " + self._key})
             with self._opener(req, timeout=self.timeout) as response:
                 if hasattr(response, "geturl") and _origin(response.geturl()) != self._origin:
                     raise ProjectError(code="unsafe_redirect")
