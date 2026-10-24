@@ -117,10 +117,11 @@ Creating a lane writes to the Notion parent you supply, or the parent previously
 fnv-relay lane create --parent-page 'YOUR_PRIVATE_PARENT_PAGE_URL_OR_UUID' --label first-lane
 fnv-relay lane list
 fnv-relay lane prompt ROUTE
+fnv-relay doctor
 fnv-relay start
 ```
 
-Replace `ROUTE` with the route reported for your lane. Paste the generated prompt into your own ChatGPT web conversation with Notion access. The agent works through that private lane while the local relay handles the official checks. Leave the relay running in its terminal. `serve` checks local toolchain/isolation readiness and validates both service credentials before polling. You can add another lane while it runs. A private lock under `~/.local/share/fnv-relay-locks` prevents simultaneous workers using the same FNV key across state directories; it does not coordinate different keys for one account or other applications. Use one relay state per owner key and follow project rules for other agents. A local `MATCH` is a prerequisite for submission, not a guarantee of the project's later verification verdict.
+Replace `ROUTE` with the route reported for your lane. Run `doctor` first. After it passes, run `start` and wait for **Relay running**. Leave that terminal open, then paste the generated prompt into your own ChatGPT web conversation with Notion access. The agent works through that private lane while the local relay handles the official checks. Leave the relay running in its terminal. `serve` checks local toolchain/isolation readiness and validates both service credentials before polling. You can add another lane while it runs. A private lock under `~/.local/share/fnv-relay-locks` prevents simultaneous workers using the same FNV key across state directories; it does not coordinate different keys for one account or other applications. Use one relay state per owner key and follow project rules for other agents. A local `MATCH` is a prerequisite for submission, not a guarantee of the project's later verification verdict.
 
 Optional lane selectors include `--order largest`, or `smallest`; `--band '<=255'`, `256-511`, `512-1K`, `1K-4K`, or `4K+`; `--address 0x...`; and `--min-bytes` / `--max-bytes`. Quote bands containing shell metacharacters. Ordering chooses bands rather than globally ranking every open function; `closest` is not supported in this preview. Exact byte bounds can reject an allocated function outside your range. Selectors do not override project eligibility, tier limits, leases, or another agent's claims.
 

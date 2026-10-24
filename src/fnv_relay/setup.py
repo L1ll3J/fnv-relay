@@ -42,6 +42,7 @@ def wizard(store, *, ask=None, hidden=None, show=print):
     hidden = hidden or getpass.getpass
     show("Welcome to fnv-relay. This connects your accounts and private Notion page.")
     show("Install the local game/compiler/checker first using docs/BOOTSTRAP.md.")
+    lane_for_prompt = None
     with store.lock("serve"), store.lock("setup"):
         if any(row.get("lease") for row in store.lanes()):
             raise ValueError("Resolve active claims before account setup")
@@ -89,13 +90,7 @@ def wizard(store, *, ask=None, hidden=None, show=print):
         if create in ("", "y", "yes"):
             label = "Lane " + str(len(lanes) + 1)
             lane = Engine(store, project, notion).create_lane(parent, {"order": order, "auto_resume_unfinished": True, "model_label": "ChatGPT Web via Notion"}, label)
-            show("")
-            show("Copy the text between the markers into your ChatGPT conversation:")
-            show("")
-            show("----- BEGIN CHATGPT PROMPT -----")
-            show(starter_prompt(lane))
-            show("----- END CHATGPT PROMPT -----")
-            show("")
+            lane_for_prompt = lane
         elif create not in ("n", "no"):
             raise ValueError("Please answer yes or no")
     state = str(store.root)
@@ -103,16 +98,22 @@ def wizard(store, *, ask=None, hidden=None, show=print):
     executable = Path(sys.executable).with_name("fnv-relay")
     command = str(executable) if executable.is_file() else "fnv-relay"
     prefix = shlex.quote(command) + " --state-dir " + shlex.quote(state)
-    show("Setup saved. Back in this terminal:")
+    show("Setup saved. Complete these steps in order:")
     show("")
-    show("Check readiness:")
+    show("1. Check readiness. Continue only if the checks pass:")
     show("  " + prefix + " doctor")
     show("")
-    show("Start the relay:")
+    show("2. Start the relay:")
     show("  " + prefix + " start")
+    show("Wait for 'Relay running'. Leave this terminal open.")
     show("")
-    show("While it is running, use another terminal to inspect or stop it:")
+    if lane_for_prompt is not None:
+        show("3. Only after the relay is running, paste the text between these markers into ChatGPT:")
+        show("")
+        show("----- BEGIN CHATGPT PROMPT -----")
+        show(starter_prompt(lane_for_prompt))
+        show("----- END CHATGPT PROMPT -----")
+        show("")
+    show("Optional commands for another terminal while the relay is running:")
     show("  " + prefix + " status")
     show("  " + prefix + " stop")
-    show("")
-    show("Start only after the readiness checks pass.")

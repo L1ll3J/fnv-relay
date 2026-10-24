@@ -31,10 +31,11 @@ First connect Notion manually in ChatGPT: **Settings → Integrations → Plugin
    fnv-relay lane create --parent-page 'YOUR_PRIVATE_PARENT_URL_OR_UUID' --label first-lane
    fnv-relay lane list
    fnv-relay lane prompt ROUTE
+   fnv-relay doctor
    fnv-relay start
    ```
 
-   Replace `ROUTE` with your lane's route. Paste the generated prompt into ChatGPT with Notion access. Starting the relay authorizes live FNV claims and submissions under your account.
+   Replace `ROUTE` with your lane's route. Run `doctor`, then `start`. Wait for **Relay running** and leave the terminal open; only then paste the generated prompt into ChatGPT with Notion access. Starting the relay authorizes live FNV claims and submissions under your account.
 4. Check `fnv-relay status`; use `fnv-relay stop` to release tracked claims and exit safely. Use `fnv-relay drain` to finish current work first. Ctrl+C also requests safe release. Pending/uncertain claims remain reserved for review, so read the shutdown summary. Restarting continues saved work on unpaused lanes; use `lane resume "My lane"` for a manually paused lane. Continuation stays on its unfinished function.
 
 Keep tokens, private page links, game bytes, project context, candidate source, and traces out of Discord and public releases. Follow the [official FNV instructions](https://fnvdecomp.com/agents.md) and [contributor terms](https://fnvdecomp.com/legal.html).

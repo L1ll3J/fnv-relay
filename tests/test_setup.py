@@ -34,6 +34,8 @@ def test_setup_connects_missing_accounts_verifies_page_and_creates_first_lane(tm
         text = "\n".join(shown)
         assert "fnv-secret" not in text and "notion-secret" not in text
         assert "Welcome courier o7" in text and " start" in text and " stop" in text
+        assert text.index("1. Check readiness") < text.index("2. Start the relay") < text.index("BEGIN CHATGPT PROMPT")
+        assert "Leave this terminal open" in text
     finally:
         store.close()
 
