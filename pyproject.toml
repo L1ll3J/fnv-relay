@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fnv-relay"
+version = "0.1.0"
+description = "Local, model-free Notion relay for owner-operated FNV decompilation"
+requires-python = ">=3.11.8"
+license = "MIT"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+fnv-relay = "fnv_relay.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

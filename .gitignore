@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.coverage
+/state/
+secrets.json
+*.iso
+*.exe
+*.dll
+*.lib
+*.pdb
+*.cab
+*.msi
