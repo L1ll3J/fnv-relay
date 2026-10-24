@@ -285,7 +285,7 @@ class Engine:
         scope = {'route_token': lane['route_token'], 'claim_id': cid, 'pack_sha256': lease['pack_sha256']}
         schema = {'protocol': PROTOCOL, 'kind': 'CANDIDATE', 'sender': 'chatgpt', **scope, 'candidate_id': 'UNIQUE_CANDIDATE', 'files': [{'filename': 'candidate.cpp', 'source_utf8': 'COMPLETE_SOURCE', 'source_sha256': 'SHA256', 'source_bytes': 0}]}
         batch = {'protocol': PROTOCOL, 'kind': 'BATCH', 'sender': 'chatgpt', 'message_id': 'UNIQUE_MESSAGE', **scope, 'candidates': [{'candidate_id': 'UNIQUE_CANDIDATE', 'page': 'NOTION_PAGE_UUID'}]}
-        self.publish(lane, key, {'next_action':dict(NEXT_ACTION), 'status': 'ASSIGNED', 'scope': scope, 'lease': lease, 'pages': pages, 'candidate_schema': schema, 'batch_schema': batch, 'source_limit_bytes': self.config.get('max_candidate_bytes', 1048576), 'instructions': 'Match the complete assigned function using original pack/types/flags. Use named-field C++, no asm/naked/raw-byte or absolute-address tricks. Save complete sources as CANDIDATE JSON pages. Three or four distinct candidates per batch are encouraged; max8. There is NO total check cap. A MATCH still needs independent plain validation. Only controller submits using the owner API key. Do not send commands or credentials. Stop new candidates before expiry minus14minutes. Ask REQUEST for small missing context; GIVEUP explicitly releases an unfinished task. Report suspected defects with DEFECT_PROPOSAL; these queue for review and never automatically flag solely on your assertion. For source>24k characters use parts:[{page,part_index,chunk_sha256}] instead ofsource_utf8; eachpage haskindSOURCE_CHUNK andsameclaim/pack/route/candidate scope, source_utf8 andpart_index. Whole sourceSHA/bytes are required on CANDIDATE file.'})
+        self.publish(lane, key, {'next_action':dict(NEXT_ACTION), 'status': 'ASSIGNED', 'scope': scope, 'lease': lease, 'pages': pages, 'candidate_schema': schema, 'batch_schema': batch, 'source_limit_bytes': self.config.get('max_candidate_bytes', 1048576), 'instructions': 'Match the complete assigned function using original pack/types/flags. Use named-field C++, no asm/naked/raw-byte or absolute-address tricks. Save complete sources as CANDIDATE JSON pages. Three or four distinct candidates per batch are encouraged; max8. There is NO total check cap. A MATCH still needs independent plain validation. Only controller submits using the owner API key. Do not send commands or credentials. Stop new candidates before expiry minus14minutes. Ask REQUEST for small missing context. The local controller manages claim release and continuation. Report suspected defects with DEFECT_PROPOSAL; these queue for review and never automatically flag solely on your assertion. For source>24k characters use parts:[{page,part_index,chunk_sha256}] instead ofsource_utf8; eachpage haskindSOURCE_CHUNK andsameclaim/pack/route/candidate scope, source_utf8 andpart_index. Whole sourceSHA/bytes are required on CANDIDATE file.'})
         with self.lane_lock(lane['route_token']):
             if not self.preparing_current(lane, cid): return
             lane['state'] = 'assigned'; lane.pop('resume', None); self.store.put_lane(lane)
@@ -630,8 +630,6 @@ class Engine:
                             lane['ready']=True; self.store.put_lane(lane)
                     if kind in ('HELLO','READY'): pass
                     elif kind=='BATCH' and lane['state']=='assigned': self.batch(lane,message)
-                    elif kind=='GIVEUP' and lane.get('lease'):
-                        self.scope(lane,message); self.release(lane,str(message.get('note','Web agent requested release')),resume=False)
                     elif kind=='REQUEST': self.scope(lane,message); self.request(lane,message)
                     elif kind in ('DEFECT_PROPOSAL','FINDING'):
                         self.scope(lane,message); self.store.event(kind.lower(),message)
@@ -639,7 +637,7 @@ class Engine:
                             self.refresh(lane); self.scope(lane,message); notes=Path(lane['lease']['directory'])/'continuation-notes.json'
                             previous=json.loads(notes.read_text()) if notes.exists() else []
                             if len(previous)<100: previous.append(message); write_json(notes,previous)
-                        self.publish(lane,'note:'+lane['route_token']+':'+mid,{'status':'RECORDED_REVIEW_ONLY','message_id':mid,'instructions':'No automatic flag was sent. Source/log context is retained. Continue permitted work or explicitly GIVEUP.'})
+                        self.publish(lane,'note:'+lane['route_token']+':'+mid,{'status':'RECORDED_REVIEW_ONLY','message_id':mid,'instructions':'No automatic flag was sent. Source/log context is retained. Continue permitted work while the current assignment remains active.'})
                     else: continue
                     self.store.set(key,identity)
                 self.refresh(lane)

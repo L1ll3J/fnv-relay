@@ -295,3 +295,16 @@ def test_changed_prior_message_is_rejected_without_starving_new_round(env):
     env.engine.poll()
     assert env.store.get('message:'+env.route+':new-finding') is not None
     assert env.store.get('message:'+env.route+':hello') == sha(module.canonical(original))
+
+
+def test_web_giveup_cannot_release_claim_but_owner_shutdown_can(env):
+    current = assign(env)
+    claim_id = current["lease"]["claim_id"]
+    env.notion.append(current["inbox"], message(env, "GIVEUP", "web-giveup"))
+    env.engine.poll()
+    assert lane(env)["state"] == "assigned"
+    assert lane(env)["lease"]["claim_id"] == claim_id
+    assert not any(tool == "giveup" for tool, _ in env.project.calls)
+    env.engine.release_all("Owner stopped relay")
+    assert [args["claim_id"] for tool, args in env.project.calls if tool == "giveup"] == [claim_id]
+    assert not lane(env).get("lease")

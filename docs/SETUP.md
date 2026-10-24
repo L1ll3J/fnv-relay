@@ -155,6 +155,8 @@ References checked 2026-10-24: [FNV instructions](https://fnvdecomp.com/agents.m
 
 ## Next assignments and model attribution
 
+Free or lighter models may end their turn before finishing a task. To continue, send **“Persistence, courier. o7”** in the same conversation. This worked in our Free-account trial; it is a suggestion, not a guarantee that the model will remain active.
+
 An accepted submission can move the lane to its next eligible function without waiting for overnight verification. The local `MATCH` and fresh independent check remain required; project limits and account-health checks still apply. The starter asks the web agent to keep checking its outbox after each task. The relay cannot force ChatGPT to stay active indefinitely or restart a completed web turn: if the web conversation stops, continue it yourself. Fresh agent activity or an explicit resume is still required for new admissions.
 
 FNV contribution credit stays with your account. New lanes default to the honest attribution `ChatGPT Web via Notion`, which describes the route without guessing a model. To record a model actually confirmed by the UI, pass `lane create --model-label 'YOUR CONFIRMED MODEL via Web'`. The setup wizard uses the route default. Subscription names or the agent's self-report do not establish model identity, and a web message cannot replace your configured attribution. Model attribution is optional project metadata; it does not change account ownership.
