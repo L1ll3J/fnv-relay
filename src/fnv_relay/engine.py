@@ -94,10 +94,54 @@ class Engine:
             lane = self.store.lane(route)
             if lane is None: raise ValueError('Unknown lane')
             lane['paused'] = True; lane['explicit_resume'] = False
+            lane.pop('blocked_reason', None)
             self.store.put_lane(lane)
             if release and lane.get('lease'):
                 self.release(lane, 'Owner paused lane and requested release')
             return self.store.lane(route)
+
+    def park_continuation(self, lane, reason='function_paused'):
+        resume = lane.get('resume')
+        if not resume: return
+        parked = lane.setdefault('parked', [])
+        if not any(x['continuation']['previous_claim_id'] == resume['previous_claim_id'] for x in parked):
+            parked.append({'continuation':dict(resume), 'reason':reason, 'parked_at':self.clock(), 'notified':False})
+        lane.pop('resume', None)
+        lane.pop('blocked_reason', None)
+        denial = lane.get('last_claim_denial') or {}
+        if denial.get('status') == 403 and denial.get('retry_after') is None:
+            lane.pop('admission_not_before', None)
+        lane.update(state='idle', paused=False)
+        self.store.put_lane(lane)
+        self.store.event('continuation_parked', {'route_token':lane['route_token'], 'address':resume['address']})
+
+    def publish_parked(self, lane):
+        for entry in lane.get('parked', []):
+            if entry.get('notified'): continue
+            resume = entry['continuation']
+            self.publish(lane, 'parked:'+lane['route_token']+':'+resume['previous_claim_id']+':'+entry['reason'],
+                         {'status':'CONTINUATION_PARKED', 'address':resume['address'],
+                          'previous_claim_id':resume['previous_claim_id'], 'reason':entry['reason'],
+                          'work_preserved':True, 'next_task':'next_eligible_function', 'next_action':dict(NEXT_ACTION)})
+            entry['notified'] = True
+            self.store.put_lane(lane)
+
+    def resume_parked(self, route, address):
+        with self.lane_lock(route):
+            lane = self.store.lane(route)
+            if lane is None: raise ValueError('Unknown lane')
+            if lane.get('lease') or lane['state'] not in ('idle','resume_pending'):
+                raise ValueError('Finish or release the current claim before selecting saved work')
+            selected = next((x for x in lane.get('parked',[]) if x['continuation']['address'].lower() == address.lower()), None)
+            if selected is None: raise ValueError('No parked continuation for this address')
+            if lane.get('resume'): self.park_continuation(lane, 'owner_selected_other_saved_task')
+            lane['parked'].remove(selected)
+            lane['resume'] = selected['continuation']
+            lane['resume']['not_before'] = self.clock()
+            lane.update(state='resume_pending', paused=False, ready=True, explicit_resume=True)
+            lane.pop('blocked_reason',None)
+            self.store.put_lane(lane)
+            return lane
 
     def resume_lane(self, route):
         with self.lane_lock(route):
@@ -151,7 +195,8 @@ class Engine:
         if self.store.get('policy_miss:'+lane['route_token']) == sha(canonical(policy)): return None
         limits = status['limits']; own = [c for c in status['open_claims'] if c.get('this_key')]
         if len(status['open_claims']) >= limits['claims'] or status['submissions_today'] + len(own) >= limits['subsPerDay'] or status['awaiting_verification'] + len(own) >= limits['pending']: return None
-        if policy.get('address'): return {'address': policy['address'], 'context_mode': 'resume'}
+        parked_addresses = {x['continuation']['address'].lower() for x in lane.get('parked',[])}
+        if policy.get('address') and policy['address'].lower() not in parked_addresses: return {'address': policy['address'], 'context_mode': 'resume'}
         # The project exposes bands, not a globally ranked list of open addresses.
         available = {r['band']: r for r in self.project.call('list_bands', {})['bands']}
         order = policy.get('order', 'largest')
@@ -223,10 +268,9 @@ class Engine:
                 if not isinstance(info,dict) or info.get('address') != resume['address'] or not isinstance(info.get('state'),str):
                     raise ValueError('Continuation eligibility was not confirmed')
                 if info['state'].split(' ',1)[0].lower() == 'paused':
-                    lane.update(paused=True, blocked_reason='function_paused')
-                    self.store.put_lane(lane)
-                    self.store.event('continuation_function_paused', {'route_token':lane['route_token'], 'address':resume['address']})
-                    return
+                    self.park_continuation(lane)
+                    self.publish_parked(lane)
+                    resume = None
             args = {'address': resume['address'], 'context_mode': 'resume'} if resume else self.select(lane, status)
             if args is None or self.admission_blocked(): return
             lane['sequence'] += 1; lane['state'] = 'claim_intent'; lane['claim_owner']=self.owner; self.store.put_lane(lane)
@@ -636,6 +680,9 @@ class Engine:
                 if lane['state']=='claim_intent':
                     recovered=self.recover_claim_intent(lane)
                     if recovered=='owned_claim_recovered': self.release(lane,'Resolved saved claim response after interrupted assignment')
+                if lane.get('blocked_reason') == 'function_paused' and lane.get('resume') and not lane.get('lease'):
+                    self.park_continuation(lane)
+                self.publish_parked(lane)
                 lease = lane.get('lease')
                 if lease and (self.clock()+600 >= epoch(lease['expires']) or not owner_alive(lease.get('owner'))):
                     self.release(lane,'Controller unavailable or lease near expiry; preserved unfinished work')

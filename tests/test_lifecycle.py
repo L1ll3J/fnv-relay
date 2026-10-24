@@ -412,7 +412,7 @@ def test_claim_access_denial_pauses_without_uncertain_intent_or_losing_continuat
     assert env.store.operation_record('claim:'+env.route+':2')['status']=='response'
 
 
-def test_project_paused_continuation_is_saved_without_attempting_claim(env,monkeypatch):
+def test_project_paused_continuation_moves_to_next_task_and_is_explicitly_resumable(env,monkeypatch):
     automatic(env)
     env.engine.release(lane(env),'Preserve unfinished work')
     previous=deepcopy(lane(env)['resume'])
@@ -421,9 +421,55 @@ def test_project_paused_continuation_is_saved_without_attempting_claim(env,monke
         if tool=='function_info':return {'address':args['address'],'state':'paused (problem reports under review)'}
         return original(tool,args)
     monkeypatch.setattr(env.project,'call',call)
-    before=env.project.claims
+    env.project.address='0x402000'
     env.engine.assign(lane(env))
     current=lane(env)
-    assert current['paused'] and current['blocked_reason']=='function_paused'
-    assert current['resume']==previous and env.project.claims==before
-    assert env.store.pending_operations()==[]
+    assert current['state']=='assigned' and not current['paused']
+    assert current['lease']['address']=='0x402000'
+    assert current['parked'][0]['continuation']==previous
+    assert current['parked'][0]['notified']
+    assert not current.get('resume')
+    claims=[args for tool,args in env.project.calls if tool=='claim']
+    assert 'band' in claims[-1] and 'address' not in claims[-1]
+    notices=[r['payload'] for r in env.notion.messages(current['outbox']) if r.get('payload',{}).get('status')=='CONTINUATION_PARKED']
+    assert len(notices)==1 and notices[0]['address']=='0x401000'
+    with pytest.raises(ValueError,match='current claim'):
+        env.engine.resume_parked(env.route,'0x401000')
+    env.engine.release(current,'Owner switches back')
+    env.engine.resume_parked(env.route,'0x401000')
+    assert lane(env)['resume']['directory']==previous['directory']
+    assert lane(env)['parked'][0]['continuation']['address']=='0x402000'
+
+
+def test_existing_system_paused_lane_automatically_recovers_on_poll(env,monkeypatch):
+    automatic(env)
+    env.engine.release(lane(env),'Preserve old task')
+    current=lane(env);current.update(paused=True,blocked_reason='function_paused',explicit_resume=True)
+    env.store.put_lane(current)
+    env.project.address='0x402000'
+    env.engine.poll()
+    current=lane(env)
+    assert current['state']=='assigned'
+    assert current['lease']['address']=='0x402000'
+    assert current['parked'][0]['continuation']['address']=='0x401000'
+
+
+def test_park_notification_readback_retry_does_not_allocate_until_delivered(env,monkeypatch):
+    automatic(env)
+    env.engine.release(lane(env),'Preserve old task')
+    current=lane(env);current.update(paused=True,blocked_reason='function_paused',explicit_resume=True)
+    env.store.put_lane(current)
+    env.project.address='0x402000'
+    original=env.notion.messages;failed=[False]
+    def messages(page):
+        rows=original(page)
+        if page==lane(env)['outbox'] and not failed[0] and any(x.get('payload',{}).get('status')=='CONTINUATION_PARKED' for x in rows):
+            failed[0]=True;raise RuntimeError('Readback interrupted')
+        return rows
+    monkeypatch.setattr(env.notion,'messages',messages)
+    env.engine.poll()
+    assert env.project.claims==1
+    env.engine.poll()
+    assert lane(env)['state']=='assigned' and env.project.claims==2
+    notices=[r for r in original(lane(env)['outbox']) if r.get('payload',{}).get('status')=='CONTINUATION_PARKED']
+    assert len(notices)==1

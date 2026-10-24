@@ -69,9 +69,12 @@ def parser():
     create.add_argument("--model-label", default="ChatGPT Web via Notion", help="Human-confirmed model attribution; otherwise use the truthful route label")
     lane.add_parser("list")
     lane.add_parser("prompt").add_argument("route")
+    lane.add_parser("parked", help="List preserved unfinished functions").add_argument("route")
     for action in ("pause", "resume"):
         control = lane.add_parser(action)
         control.add_argument("route", help="Full route, unique prefix (4+ characters), or exact label")
+        if action == "resume":
+            control.add_argument("--address", help="Resume a parked function by address")
         if action == "pause":
             control.add_argument("--release", action="store_true", help="Also release the current claim, retaining continuation")
     serve = commands.add_parser("serve", aliases=["start"], help="Run live work under your FNV account")
@@ -238,6 +241,9 @@ def lane_command(store, args):
         if not lane.get("landing"):
             raise ValueError("Incomplete lane")
         print(presentation.starter_prompt(lane))
+    elif args.lane_action == "parked":
+        lane = presentation.resolve_lane(store, args.route)
+        output([{'address':entry['continuation']['address'], 'previous_claim_id':entry['continuation']['previous_claim_id'], 'reason':entry['reason']} for entry in lane.get('parked',[])])
     elif args.lane_action in ("pause", "resume"):
         lane = presentation.resolve_lane(store, args.route)
         key = store.secrets().get("fnv_api_key", "")
@@ -247,7 +253,10 @@ def lane_command(store, args):
             engine.pause_lane(lane["route_token"], release=args.release)
             print("Lane paused." + (" Current claim release requested." if args.release else " Current claim may finish; no new claim will be assigned."))
         else:
-            engine.resume_lane(lane["route_token"])
+            if args.address:
+                engine.resume_parked(lane["route_token"], args.address)
+            else:
+                engine.resume_lane(lane["route_token"])
             print("Lane resumed. Start the worker if it is stopped.")
     else:
         if args.order is None: args.order = store.config().get("default_task_order", "largest")
@@ -363,7 +372,7 @@ def serve(store, once=False, order=None):
         store.set("drain", False)
         store.set("shutdown_requested", False)
         for lane in store.lanes():
-            if lane.get("resume") and not lane.get("paused"):
+            if lane.get("resume") and (not lane.get("paused") or lane.get("blocked_reason") == "function_paused"):
                 engine.resume_lane(lane["route_token"])
         store.set("worker", {"pid": os.getpid(), "running": True, "started_at": time.time()})
         code = 0

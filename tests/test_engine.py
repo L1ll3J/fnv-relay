@@ -39,6 +39,7 @@ class FakeProject:
         self.calls = []
         self.open = []
         self.claims = 0
+        self.address = "0x401000"
         self.fail_submit = False
 
     def call(self, tool, args):
@@ -51,7 +52,7 @@ class FakeProject:
             return {"address":args["address"], "state":"open"}
         if tool == "claim":
             self.claims += 1
-            claim = {"claim_id": "claim-" + str(self.claims), "address": "0x401000", "size": 32, "expires_at": datetime.fromtimestamp(self.now + 7200, timezone.utc).isoformat(), "this_key": True}
+            claim = {"claim_id": "claim-" + str(self.claims), "address": self.address, "size": 32, "expires_at": datetime.fromtimestamp(self.now + 7200, timezone.utc).isoformat(), "this_key": True}
             self.open.append(claim)
             return deepcopy(claim)
         if tool == "packet":
@@ -67,7 +68,7 @@ class FakeProject:
         raise AssertionError(tool)
 
     def download_pack(self, url, dest):
-        files = {"pack.json": json.dumps({"address": "0x401000", "size": 32, "flags": []}), "source.cpp": "int target();\n", "types.h": "struct Example {};\n"}
+        files = {"pack.json": json.dumps({"address": self.address, "size": 32, "flags": []}), "source.cpp": "int target();\n", "types.h": "struct Example {};\n"}
         with tarfile.open(dest, "w:gz") as archive:
             for name, text in files.items():
                 raw = text.encode()

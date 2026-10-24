@@ -362,3 +362,19 @@ def test_start_prints_existing_starter_and_lane_state(tmp_path,monkeypatch,capsy
     assert 'BEGIN CHATGPT PROMPT' in out and 'Welcome courier o7' in out
     assert 'awaiting web agent' in out
     assert 'does not yet mean a claim is assigned' in out
+
+
+@pytest.mark.parametrize('system_pause',[False,True])
+def test_start_rearms_project_pause_but_preserves_owner_pause(tmp_path,monkeypatch,system_pause):
+    store=Store(tmp_path)
+    row={'route_token':'test-route','label':'test','state':'resume_pending','paused':True,'resume':{'address':'0x401000'},'policy':{}}
+    if system_pause: row['blocked_reason']='function_paused'
+    store.put_lane(row);store.close()
+    monkeypatch.setattr(cli,'clients',lambda store:(Mock(),Mock()))
+    monkeypatch.setattr(cli,'host_checks',lambda paths:{'ready':True})
+    monkeypatch.setattr(cli,'account_lock',lambda key:nullcontext())
+    engine=Mock();engine.release_all.return_value={'counts':{'released':0,'pending':0,'uncertain':0}}
+    monkeypatch.setattr(cli,'Engine',Mock(return_value=engine))
+    assert call(tmp_path,'start','--once')==0
+    if system_pause: engine.resume_lane.assert_called_once_with('test-route')
+    else: engine.resume_lane.assert_not_called()

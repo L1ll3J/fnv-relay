@@ -58,7 +58,7 @@ def snapshot(store, version):
         error_type = error.get("type")
         if not isinstance(error_type, str) or not re.fullmatch(r"[A-Za-z_]{1,80}", error_type):
             error_type = None
-        rows.append({"route_token": lane["route_token"], "label": clean(lane.get("label", "Lane")), "state": clean(lane.get("state")), "paused": bool(lane.get("paused")), "auto_resume": bool(lane.get("policy", {}).get("auto_resume_unfinished", False)), "model_label": clean(lane.get("policy", {}).get("model_label", "ChatGPT Web via Notion")), "claim_id": claim, "address": clean(lease.get("address") or (lane.get("resume") or {}).get("address")), "size_bytes": lease.get("size"), "expires_at": lease.get("expires"), "best_diff": best, "checks": store.get("checks:" + claim) or 0 if claim else 0, "error_type": error_type, "continuation": bool(lane.get("resume")), "cooldown_until": (lane.get("resume") or {}).get("not_before"), "has_active_lease": bool(lease), "landing": lane.get("landing")})
+        rows.append({"route_token": lane["route_token"], "label": clean(lane.get("label", "Lane")), "state": clean(lane.get("state")), "paused": bool(lane.get("paused")), "auto_resume": bool(lane.get("policy", {}).get("auto_resume_unfinished", False)), "model_label": clean(lane.get("policy", {}).get("model_label", "ChatGPT Web via Notion")), "claim_id": claim, "address": clean(lease.get("address") or (lane.get("resume") or {}).get("address")), "size_bytes": lease.get("size"), "expires_at": lease.get("expires"), "best_diff": best, "checks": store.get("checks:" + claim) or 0 if claim else 0, "error_type": error_type, "continuation": bool(lane.get("resume")), "parked_functions": len(lane.get("parked", [])), "cooldown_until": (lane.get("resume") or {}).get("not_before"), "has_active_lease": bool(lease), "landing": lane.get("landing")})
     secrets = store.secrets()
     oauth = secrets.get("notion_oauth") or {}
     oauth_tokens = oauth.get("tokens") or {}
@@ -99,6 +99,8 @@ def human_status(data):
                 details.append("cooldown")
         if row["continuation"]:
             details.append("saved function")
+        if row.get("parked_functions"):
+            details.append(str(row["parked_functions"]) + " parked function(s)")
         if row["error_type"]:
             details.append(row["error_type"])
         table.append((row["label"] + " / " + row["route_token"][:8], {"waiting_hello":"awaiting web agent", "claim_intent":"claim needs review", "preparing":"sending assignment", "assigned":"working", "resume_pending":"waiting to reclaim", "closed_requires_reconciliation":"needs review"}.get(row["state"],row["state"]), row["address"], str(row["size_bytes"] or "-"), expires, str(row["best_diff"] if row["best_diff"] is not None else "-"), str(row["checks"]), ", ".join(details)))
