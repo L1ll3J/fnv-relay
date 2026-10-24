@@ -21,7 +21,7 @@ def starter_prompt(lane):
             "Today we're going to be doing some decompiling work, it's hard, but it's honest work. "
             "You might find it difficult but that's okay, this is largely a game of creative trial-and-error. "
             "Persistence and clever thinking will pay dividends here.\n\n"
-            "[" + url + "](" + url + ")\n\n"
+            + url + "\n\n"
             "Read that landing page and register using route UUID `" + lane["route_token"] + "`, "
             "following its HELLO instructions. Read future assignments and results from that lane’s outbox.\n\n"
             "You have my explicit approval to read, create and edit pages within this private Notion relay for this project, "
