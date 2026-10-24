@@ -96,3 +96,30 @@ def test_child_pages_ignore_json_data_and_parent_wrapper():
     content=f'<page url="https://app.notion.com/p/{PAGE}">Parent<content>\n<page url="https://app.notion.com/p/{CHILD}">Child</page>\n'+markdown([{'fake':f'<page url="https://app.notion.com/p/{PAGE}">Fake</page>'}])+'\n</content></page>'
     caller=Caller({'text':content})
     assert NotionMCP(None,caller=caller).child_pages(PAGE)==[{'id':CHILD,'title':'Child'}]
+
+
+
+def test_pre_send_busy_is_not_misreported_as_remote_transport_error():
+    from fnv_relay.store import OperationNotStarted
+    from fnv_relay.notion_mcp import NotionMCP
+    def busy(*args):raise OperationNotStarted('busy before send')
+    with pytest.raises(OperationNotStarted):NotionMCP(None,caller=busy)._call('notion-create-pages',{})
+
+
+
+def test_busy_async_poll_does_not_reclassify_accepted_write_as_unsent(tmp_path):
+    from fnv_relay.store import Store, OperationNotStarted
+    from fnv_relay.notion import NotionError
+    from fnv_relay.notion_mcp import NotionMCP
+    store=Store(tmp_path);calls=[]
+    def caller(name,args):
+        calls.append(name)
+        if name=='notion-create-pages':
+            return {'structuredContent':{'object':'async_task','id':'task-1','status':'queued','poll_after_seconds':0}}
+        raise OperationNotStarted('async poll not sent')
+    notion=NotionMCP(store,caller=caller,sleep=lambda _:None)
+    with pytest.raises(NotionError,match='mcp_async_poll_busy'):
+        store.operation('create:test:inbox',{},lambda:notion.create_page('01234567-89ab-cdef-0123-456789abcdef','Test',[]))
+    assert store.operation_record('create:test:inbox')['status']=='uncertain'
+    assert calls==['notion-create-pages','notion-get-async-task']
+    store.close()

@@ -268,3 +268,26 @@ def test_shutdown_cancels_read_backoff_and_can_be_disabled_for_cleanup():
     assert caught.value.code=='cancelled' and len(server.calls)==1
     client.set_stop_event(None)
     assert client.call('status',{})=={'open_claims':[]}
+
+
+
+def test_definitely_unsent_operation_preserves_binding_and_can_retry(tmp_path):
+    from fnv_relay.store import OperationNotStarted
+    store=Store(tmp_path)
+    with pytest.raises(OperationNotStarted):
+        store.operation('create:lane:inbox',{'title':'same'},lambda:(_ for _ in ()).throw(OperationNotStarted('busy')))
+    assert store.operation_record('create:lane:inbox')['status']=='not_sent'
+    assert store.pending_operations()==[]
+    with pytest.raises(ValueError):store.operation('create:lane:inbox',{'title':'changed'},lambda:'wrong')
+    assert store.operation('create:lane:inbox',{'title':'same'},lambda:'confirmed')=='confirmed'
+    store.close()
+
+
+def test_lock_can_wait_for_other_holder_and_timeout_is_bounded(tmp_path):
+    import fcntl,time
+    store=Store(tmp_path)
+    with store.lock('session'):
+        with pytest.raises(AlreadyRunning):
+            with store.lock('session',timeout=.02):pass
+    with store.lock('session',timeout=.02):pass
+    store.close()

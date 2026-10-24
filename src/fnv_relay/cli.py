@@ -24,7 +24,8 @@ from .engine import BANDS, Engine
 from .notion import Notion, NotionError, page_id
 from .notion_oauth import OAuthError
 from .project import FNV, ProjectError
-from .store import AlreadyRunning, Store, UncertainOperation
+from .store import AlreadyRunning, Store, UncertainOperation, OperationNotStarted
+from .lifecycle import process_identity, owner_alive
 
 DEFAULT_STATE = "~/.local/share/fnv-relay"
 PATHS = ("game_exe", "checker_dir", "compiler_dir", "function_index", "symbols", "compiler_tips", "wine_prefix", "python")
@@ -69,6 +70,9 @@ def parser():
     create.add_argument("--max-bytes", type=int, default=2**31 - 1)
     create.add_argument("--label", default="Pro lane")
     create.add_argument("--model-label", default="ChatGPT Web via Notion", help="Human-confirmed model attribution; otherwise use the truthful route label")
+    recover = lane.add_parser("recover", help="Finish an incomplete lane setup using Notion readback")
+    recover.add_argument("route")
+    recover.add_argument("--retry-missing", action="store_true", help="Authorize a fresh attempt only after readback finds no matching page")
     lane.add_parser("list")
     lane.add_parser("prompt").add_argument("route")
     lane.add_parser("parked", help="List preserved unfinished functions").add_argument("route")
@@ -81,6 +85,8 @@ def parser():
             control.add_argument("--release", action="store_true", help="Also release the current claim, retaining continuation")
     serve = commands.add_parser("serve", aliases=["start"], help="Run live work under your FNV account")
     serve.add_argument("--once", action="store_true")
+    serve.add_argument("--menu-owner-pid", type=int, help=argparse.SUPPRESS)
+    serve.add_argument("--menu-owner-start-time", help=argparse.SUPPRESS)
     serve.add_argument("--order", choices=preferences.ORDERS, help="Save and apply an order to future tasks in unpaused lanes")
     status = commands.add_parser("status", help="Human-readable local status")
     status.add_argument("--json", action="store_true", help="Stable machine-readable status")
@@ -240,9 +246,16 @@ def lane_command(store, args):
         print(presentation.human_status(presentation.snapshot(store, __version__)))
     elif args.lane_action == "prompt":
         lane = presentation.resolve_lane(store, args.route)
-        if not lane.get("landing"):
-            raise ValueError("Incomplete lane")
+        if lane.get('state') == 'setup' or not lane.get('landing'):
+            print('Lane setup is incomplete. Use Add lane in the menu to recover it before copying a starter.')
+            return
         print(presentation.starter_prompt(lane))
+    elif args.lane_action == "recover":
+        lane = presentation.resolve_lane(store,args.route)
+        project,notion = clients(store)
+        with store.lock("lane-create"):
+            lane = Engine(store,project,notion).finish_lane_setup(lane,retry_missing=args.retry_missing)
+        output(summary(lane))
     elif args.lane_action == "parked":
         lane = presentation.resolve_lane(store, args.route)
         output([{'address':entry['continuation']['address'], 'previous_claim_id':entry['continuation']['previous_claim_id'], 'reason':entry['reason']} for entry in lane.get('parked',[])])
@@ -354,7 +367,13 @@ def reconcile_claim(store, route):
         print("No active claim belongs to this key. Original intent retained; unfinished work is ready to resume on start.")
 
 
-def serve(store, once=False, order=None):
+
+def stop_unstarted_worker(store, project):
+    engine = Engine(store,project,None,watchdog=False)
+    return release_report(store,engine,'Menu closed before worker startup completed')
+
+
+def serve(store, once=False, order=None, menu_owner=None):
     project, notion = clients(store)
     if not all(host_checks(store.config().get("paths", {})).values()):
         raise ValueError("Toolchain or isolation health check failed")
@@ -366,9 +385,12 @@ def serve(store, once=False, order=None):
     event = threading.Event()
     project.set_stop_event(event)
     with store.lock("serve"), account_lock(store.secrets().get("fnv_api_key", "")):
+        if menu_owner is not None and (not owner_alive(menu_owner) or store.get('shutdown_requested')):
+            return stop_unstarted_worker(store,project)
         if store.pending_operations():
             raise UncertainOperation("Reconciliation required")
-        engine = Engine(store, project, notion, should_stop=event.is_set)
+        stopping = lambda: event.is_set() or menu_owner is not None and not owner_alive(menu_owner)
+        engine = Engine(store, project, notion, should_stop=stopping)
         selected,apply_order = preferences.start_order(store,order)
         if apply_order:
             for row in store.lanes():
@@ -382,7 +404,7 @@ def serve(store, once=False, order=None):
         for lane in store.lanes():
             if lane.get("resume") and (not lane.get("paused") or lane.get("blocked_reason") == "function_paused"):
                 engine.resume_lane(lane["route_token"])
-        store.set("worker", {"pid": os.getpid(), "running": True, "started_at": time.time()})
+        store.set("worker", {**(process_identity() or {"pid":os.getpid()}), "running": True, "started_at": time.time()})
         code = 0
         with shutdown_signals(event):
             try:
@@ -394,7 +416,7 @@ def serve(store, once=False, order=None):
                         print(presentation.starter_prompt(row))
                         print("----- END CHATGPT PROMPT -----", flush=True)
                 previous_status = None
-                while not event.is_set() and not store.get("shutdown_requested"):
+                while not stopping() and not store.get("shutdown_requested"):
                     engine.poll()
                     current_status = presentation.human_status(presentation.snapshot(store, __version__))
                     if current_status != previous_status:
@@ -460,7 +482,9 @@ def run(args, store):
         if not sys.stdin.isatty():
             raise ValueError("Menu needs an interactive terminal")
         from . import interactive
-        return interactive.run(store, lambda command: main(["--state-dir",str(store.root),*command]))
+        from .managed import menu_signals
+        with menu_signals():
+            return interactive.run(store, lambda command: main(["--state-dir",str(store.root),*command]))
     elif args.command == "init":
         if not (store.root / "config.json").exists():
             store.set_config(store.config())
@@ -490,7 +514,10 @@ def run(args, store):
     elif args.command == "lane":
         lane_command(store, args)
     elif args.command in ("serve", "start"):
-        return serve(store, args.once, order=args.order)
+        if (args.menu_owner_pid is None) != (args.menu_owner_start_time is None):
+            raise ValueError("Menu owner identity is incomplete")
+        owner = {"pid":args.menu_owner_pid,"start_time":args.menu_owner_start_time} if args.menu_owner_pid is not None else None
+        return serve(store, args.once, order=args.order, menu_owner=owner)
     elif args.command in ("stop", "shutdown"):
         return stop(store, args.timeout)
     elif args.command == "drain":
@@ -540,8 +567,13 @@ def main(argv=None):
         print(str(exc), file=sys.stderr)
     except authentication.ConnectionError as exc:
         print(str(exc), file=sys.stderr)
-    except AlreadyRunning:
-        print("Another relay command holds the worker lock.", file=sys.stderr)
+    except OperationNotStarted as exc:
+        print(str(exc), file=sys.stderr)
+    except AlreadyRunning as exc:
+        if "notion-oauth-session" in str(exc):
+            print("The Notion connection is busy. No new connection request was started.", file=sys.stderr)
+        else:
+            print("Another relay command is running. Use the existing menu; it can manage lanes while the worker runs.", file=sys.stderr)
     except UncertainOperation:
         print("An uncertain external operation requires review; no automatic retry was made. Run reconcile. For an uncertain claim request, stop the relay and run reconcile --claim ROUTE to verify current ownership.", file=sys.stderr)
     except (ProjectError, NotionError) as exc:

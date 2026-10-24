@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlsplit, urlunsplit, urlencode
 import webbrowser
 
 from .notion import NotionError, _retry_after, page_id
+from .store import AlreadyRunning, OperationNotStarted
 
 SERVER = 'https://mcp.notion.com/mcp'
 ORIGIN = 'https://mcp.notion.com'
@@ -202,14 +203,21 @@ class SDKCaller:
 
     def __call__(self, name, arguments):
         # Serialize refresh-token rotation with other relay processes on this state dir.
-        with self.store.lock('notion-oauth-session'):
-            storage = TokenStorage(self.store)
-            if not storage.data.get('tokens'): raise OAuthError('Notion is not connected. Run auth notion connect.')
-            try:
-                return asyncio.run(sdk_call(provider(storage), name, arguments, timeout=self.timeout))
-            except (OAuthError,NotionError): raise
-            except Exception:
-                raise NotionError(safe_retry=name in ('notion-fetch','notion-get-self'), code='mcp_transport_error') from None
+        acquired = False
+        try:
+            with self.store.lock('notion-oauth-session', timeout=min(self.timeout,30)):
+                acquired = True
+                storage = TokenStorage(self.store)
+                if not storage.data.get('tokens'): raise OAuthError('Notion is not connected. Run auth notion connect.')
+                try:
+                    return asyncio.run(sdk_call(provider(storage), name, arguments, timeout=self.timeout))
+                except (OAuthError,NotionError): raise
+                except Exception:
+                    raise NotionError(safe_retry=name in ('notion-fetch','notion-get-self'), code='mcp_transport_error') from None
+        except AlreadyRunning:
+            if not acquired:
+                raise OperationNotStarted('Notion is busy with another relay operation. No request was sent; try again shortly.') from None
+            raise
 
 
 def connect(store, *, show=print, open_browser=webbrowser.open, timeout=300, _call=None):

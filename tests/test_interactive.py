@@ -39,7 +39,7 @@ def test_failed_creation_does_not_claim_success_or_remove_existing_lane(tmp_path
     store.put_lane({'route_token':'existing','label':'Lane 1','landing':PAGE,'state':'idle'})
     interactive.run(store,lambda _:1,ask=answers('2','1','0'),show=shown.append)
     assert len(store.lanes())==1
-    assert any('did not finish' in line for line in shown)
+    assert any('unfinished' in line for line in shown)
     assert 'BEGIN CHATGPT PROMPT' not in '\n'.join(shown)
     store.close()
 
@@ -57,9 +57,10 @@ def test_no_command_defaults_to_menu():
 
 
 def test_menu_status_start_stop_are_existing_handlers(tmp_path):
-    store=Store(tmp_path);calls=[]
-    interactive.run(store,lambda command:calls.append(command),ask=answers('4','1','7','0'),show=lambda _:None)
-    assert calls==[['status'],['start'],['stop']]
+    store=Store(tmp_path);calls=[];worker=FakeWorker()
+    interactive.run(store,lambda command:calls.append(command),ask=answers('4','1','7','0'),show=lambda _:None,worker=worker)
+    assert calls==[['status']]
+    assert worker.calls==['start','stop','stop']
     store.close()
 
 
@@ -85,3 +86,57 @@ def test_launcher_without_configuration_explains_setup(tmp_path,capsys):
     with pytest.raises(SystemExit) as caught:runpy.run_path(str(launcher),run_name='__main__')
     assert caught.value.code==1
     assert 'bootstrap' in capsys.readouterr().err
+
+
+class FakeWorker:
+    def __init__(self): self.active=False; self.calls=[]
+    def running(self): return self.active
+    def start(self): self.active=True; self.calls.append('start')
+    def stop(self): self.active=False; self.calls.append('stop'); return True
+
+
+def test_menu_stays_available_for_add_lane_after_start(tmp_path):
+    store=Store(tmp_path);shown=[];calls=[];worker=FakeWorker()
+    def dispatch(command):
+        calls.append(command)
+        if command[:2]==['lane','create']:
+            store.put_lane({'route_token':'new-route','label':'Lane 1','landing':PAGE,'state':'waiting_hello'})
+        return 0
+    interactive.run(store,dispatch,ask=answers('1','2','1','4','0'),show=shown.append,worker=worker)
+    assert worker.calls==['start','stop']
+    assert calls==[['lane','create','--order','largest','--label','Lane 1'],['status']]
+    assert 'Welcome courier o7' in '\n'.join(shown)
+    store.close()
+
+
+def test_incomplete_lane_starter_explains_recovery_without_printing_prompt(tmp_path):
+    store=Store(tmp_path);shown=[]
+    store.put_lane({'route_token':'unfinished','label':'Lane 3','state':'setup'})
+    interactive.run(store,lambda _:0,ask=answers('3','0'),show=shown.append)
+    assert 'not ready' in '\n'.join(shown)
+    assert 'BEGIN CHATGPT PROMPT' not in '\n'.join(shown)
+    store.close()
+
+
+def test_add_lane_recovers_same_incomplete_record(tmp_path):
+    store=Store(tmp_path);shown=[];calls=[]
+    store.put_lane({'route_token':'unfinished','label':'Lane 3','state':'setup'})
+    try:store.operation('create:unfinished:inbox',{},lambda:(_ for _ in ()).throw(RuntimeError('unknown')))
+    except RuntimeError:pass
+    def dispatch(command):
+        calls.append(command)
+        row=store.lane('unfinished');row.update(state='waiting_hello',landing=PAGE);store.put_lane(row)
+        return 0
+    interactive.run(store,dispatch,ask=answers('2','y','0'),show=shown.append)
+    assert calls==[['lane','recover','unfinished','--retry-missing'],['stop','--timeout','30']]
+    assert len(store.lanes())==1
+    assert 'Welcome courier o7' in '\n'.join(shown)
+    store.close()
+
+
+def test_menu_eof_stops_managed_worker(tmp_path):
+    store=Store(tmp_path);worker=FakeWorker();worker.active=True
+    def eof(_):raise EOFError
+    assert interactive.run(store,lambda _:0,ask=eof,show=lambda _:None,worker=worker)==0
+    assert worker.calls==['stop']
+    store.close()

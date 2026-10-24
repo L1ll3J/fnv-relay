@@ -178,17 +178,61 @@ class Engine:
 
     def create_lane(self, parent, policy, label='Pro lane'):
         self.model_label({'policy':policy})
-        token = str(uuid.uuid4()); lane = {'route_token': token, 'label': label, 'state': 'setup', 'policy': policy, 'sequence': 0, 'seen': []}
+        if any(row.get('state') == 'setup' for row in self.store.lanes()):
+            raise ValueError('Finish the incomplete lane setup before adding another lane')
+        token = str(uuid.uuid4()); lane = {'route_token': token, 'label': label, 'state': 'setup', 'policy': policy, 'sequence': 0, 'seen': [], 'parent_page':parent}
         self.store.put_lane(lane)
+        return self.finish_lane_setup(lane)
+
+    def setup_operation(self, key, args, action, readback, retry_missing):
+        digest = sha(canonical(args)); operation = self.store.operation_record(key)
+        if operation and operation['args_hash'] != digest:
+            raise ValueError('Lane setup operation arguments changed')
+        if operation and operation['status'] not in ('response','not_sent'):
+            resolution = self.store.get('lane-setup-resolution:'+key)
+            if resolution:
+                if resolution.get('args_hash') != digest: raise ValueError('Lane recovery binding differs')
+                if 'result' in resolution: return resolution['result']
+                return self.setup_operation(resolution['retry_key'],args,action,readback,retry_missing)
+            found, result = readback()
+            receipt = {'args_hash':digest,'readback_at':self.clock()}
+            if found:
+                receipt['result'] = result
+                self.store.set('lane-setup-resolution:'+key,receipt)
+                return result
+            if not retry_missing:
+                raise UncertainOperation('No matching Notion page was found. Owner confirmation is required before a new creation attempt.')
+            receipt.update(retry_key=key+':retry:'+uuid.uuid4().hex, owner_authorized_missing_retry=True)
+            self.store.set('lane-setup-resolution:'+key,receipt)
+            return self.setup_operation(receipt['retry_key'],args,action,readback,False)
+        return self.store.operation(key,args,action)
+
+    def setup_page_readback(self, parent, title, record):
+        matches = []
+        for child in self.notion.child_pages(parent):
+            if child.get('title') == title and record in self.notion.messages(child['id']):
+                matches.append(child['id'])
+        if len(matches) > 1: raise UncertainOperation('Multiple matching lane pages need review')
+        return bool(matches), matches[0] if matches else None
+
+    def finish_lane_setup(self, lane, *, retry_missing=False):
+        if lane.get('state') != 'setup': raise ValueError('Lane setup is already complete')
+        token, label, policy = lane['route_token'],lane['label'],lane['policy']
+        parent = lane.get('parent_page') or self.config.get('notion_parent_page')
+        if not parent: raise ValueError('Lane parent page is required')
+        lane['parent_page'] = parent
         for role in ('inbox', 'outbox', 'data', 'landing'):
             record = {'protocol': PROTOCOL, 'route_token': token, 'role': role}
-            lane[role] = self.store.operation('create:' + token + ':' + role, {'parent': parent, 'title': label + ' ' + role}, lambda role=role, record=record: self.notion.create_page(parent, label + ' ' + role, [record]))
+            title = label+' '+role
+            lane[role] = self.setup_operation('create:'+token+':'+role, {'parent':parent,'title':title},
+                lambda title=title,record=record:self.notion.create_page(parent,title,[record]),
+                lambda title=title,record=record:self.setup_page_readback(parent,title,record),retry_missing)
             self.store.put_lane(lane)
         introduction = {'next_action':dict(NEXT_ACTION), 'protocol': PROTOCOL, 'kind': 'LANE', 'route_token': token, 'inbox': lane['inbox'], 'outbox': lane['outbox'], 'data': lane['data'], 'lease_check_limit': None, 'policy': policy,
                         'instructions': 'Register by appending HELLO JSON to the inbox. Read subsequent assignments/results from outbox. No lifetime check cap; owner/lease/batch/timeouts remain. Original source is private context. Supplemental findings never override current assignment.',
                         'hello': {'protocol': PROTOCOL, 'kind': 'HELLO', 'sender': 'chatgpt', 'route_token': token, 'message_id': 'hello-' + token},
                         'candidate_delivery': 'Create CANDIDATE pages under data, then post BATCH with candidates:[{candidate_id,page}]. Copy exact route/claim_id/pack_sha256 from ASSIGNED. Complete source or invertible literal_edits against a delivered source_sha256. See assignment schema.'}
-        self.store.operation('landing:' + token, introduction, lambda: self.notion.append(lane['landing'], introduction))
+        self.setup_operation('landing:'+token, introduction, lambda:self.notion.append(lane['landing'],introduction), lambda:(introduction in self.notion.messages(lane['landing']),None),retry_missing)
         if introduction not in self.notion.messages(lane['landing']): raise RuntimeError('Landing readback failed')
         lane['state'] = 'waiting_hello'; self.store.put_lane(lane); return lane
 

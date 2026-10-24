@@ -6,6 +6,7 @@ import re
 import time
 
 from .notion import MAX_PAYLOAD, MAX_RECORD, NotionError, page_id
+from .store import OperationNotStarted
 
 MAX_RESPONSE = 8 * 1024 * 1024
 
@@ -68,7 +69,7 @@ class NotionMCP:
     def _call(self, name, arguments):
         try:
             return unpack(self.caller(name,arguments))
-        except NotionError: raise
+        except (NotionError, OperationNotStarted): raise
         except Exception as error:
             # No remote error strings enter logs, even when a token is echoed.
             from .notion_oauth import OAuthError
@@ -85,7 +86,12 @@ class NotionMCP:
             delay=task.get('poll_after_seconds',2)
             if not isinstance(delay,(int,float)) or not 0 <= delay <= 30: raise NotionError(code='mcp_invalid_task')
             self.sleep(max(1,delay))
-            task=self._call('notion-get-async-task',{'task_id':identifier})
+            try:
+                task=self._call('notion-get-async-task',{'task_id':identifier})
+            except OperationNotStarted:
+                # The original mutation was already accepted; an unsent poll
+                # cannot make replaying that mutation safe.
+                raise NotionError(code='mcp_async_poll_busy') from None
             status=task.get('status')
             if status=='succeeded':
                 output=task.get('result')

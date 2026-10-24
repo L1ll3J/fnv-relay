@@ -23,7 +23,7 @@ class Project:
 class Notion:
  def whoami(self): return {}
 class Engine:
- def __init__(self,store,*a,should_stop=None): self.store=store; self.stopping=should_stop
+ def __init__(self,store,*a,should_stop=None,watchdog=True): self.store=store; self.stopping=should_stop
  def poll(self):
   (root/'ready').write_text('ready')
   while not self.stopping(): time.sleep(.01)
@@ -57,3 +57,13 @@ def test_controller_signal_releases_tracked_claim(tmp_path, name):
     finally:
         if child.poll() is None:
             child.kill(); child.wait()
+
+
+
+def test_disappeared_menu_owner_releases_before_polling(tmp_path):
+    script=_WORKER.replace('cli.serve(store)', "cli.serve(store, menu_owner={'pid':-1,'start_time':'missing'})")
+    env=dict(os.environ,HOME=str(tmp_path))
+    result=subprocess.run([sys.executable,'-c',script,str(tmp_path)],env=env,capture_output=True,timeout=10)
+    assert result.returncode==0,(result.stdout,result.stderr)
+    assert (tmp_path/'released').is_file()
+    assert not (tmp_path/'ready').exists()

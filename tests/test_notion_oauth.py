@@ -211,3 +211,29 @@ def test_reconnect_verifies_existing_workspace_and_every_lane_page_before_commit
     assert store.config()['notion_parent_page']=='keep-parent'
     assert store.lanes()==[lane]
     store.close()
+
+
+
+def test_sdk_session_lock_timeout_is_definitely_not_sent(tmp_path):
+    from fnv_relay.store import OperationNotStarted
+    store=Store(tmp_path)
+    with store.lock('notion-oauth-session'):
+        with pytest.raises(OperationNotStarted):oauth.SDKCaller(store,timeout=.01)('notion-create-pages',{})
+    store.close()
+
+
+
+def test_sdk_waits_for_busy_session_before_sending_once(tmp_path,monkeypatch):
+    import threading,time
+    store=Store(tmp_path);store.set_secret(oauth.SECRET_NAME,{'tokens':{'access_token':'synthetic'}})
+    held=threading.Event();calls=[]
+    def holder():
+        with store.lock('notion-oauth-session'):
+            held.set();time.sleep(.08)
+    thread=threading.Thread(target=holder);thread.start();assert held.wait(1)
+    monkeypatch.setattr(oauth,'provider',lambda storage:object())
+    async def send(auth,name,arguments,timeout):calls.append(name);return {'ok':True}
+    monkeypatch.setattr(oauth,'sdk_call',send)
+    assert oauth.SDKCaller(store,timeout=1)('notion-create-pages',{})=={'ok':True}
+    assert calls==['notion-create-pages']
+    thread.join(timeout=1);assert not thread.is_alive();store.close()

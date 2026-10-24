@@ -378,3 +378,11 @@ def test_start_rearms_project_pause_but_preserves_owner_pause(tmp_path,monkeypat
     assert call(tmp_path,'start','--once')==0
     if system_pause: engine.resume_lane.assert_called_once_with('test-route')
     else: engine.resume_lane.assert_not_called()
+
+
+
+def test_incomplete_lane_prompt_is_clear_without_partial_starter(tmp_path,capsys):
+    store=Store(tmp_path);store.put_lane({'route_token':'unfinished','label':'Lane 3','state':'setup'});store.close()
+    assert call(tmp_path,'lane','prompt','unfinished')==0
+    text=capsys.readouterr().out
+    assert 'incomplete' in text and 'Welcome courier' not in text

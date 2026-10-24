@@ -28,7 +28,7 @@ python3 -m venv .venv
 .venv/bin/fnv-relay --help
 ```
 
-After [Ubuntu/WSL2 bootstrap](docs/BOOTSTRAP.md), run **`./relay`** from the checkout to open the numbered menu. Choose **Account setup** to connect accounts if needed, **Add lane** to get a ready-to-paste ChatGPT starter, and **Start relay** to begin work. Lane selection and saved-work recovery use numbered choices; no UUIDs or command flags are required. A normal `fnv-relay` installation also opens the menu when run without a command.
+After [Ubuntu/WSL2 bootstrap](docs/BOOTSTRAP.md), run **`./relay`** from the checkout to open the numbered menu. Choose **Account setup** to connect accounts if needed, **Add lane** to get a ready-to-paste ChatGPT starter, and **Start relay** to begin work. Lane selection and saved-work recovery use numbered choices; no UUIDs or command flags are required. A normal `fnv-relay` installation also opens the menu when run without a command. Start launches a managed worker and leaves this menu available: add lanes, copy starters, inspect status or stop from the same terminal. **0 — Stop safely and exit** releases tracked claims; keep the menu open while solving. An unfinished lane is recovered through Add lane rather than creating another record. Recent worker output is available as option 8.
 
 Common commands:
 

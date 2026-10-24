@@ -428,3 +428,60 @@ def test_request_rejection_readback_failure_blocks_until_confirmed_then_continue
     assert env.store.get('message:'+env.route+':bad-request')
     assert len(env.checker.calls) == 1
     assert len([r for r in original(lane(env)['outbox']) if r.get('payload', {}).get('status') == 'REQUEST_REJECTED']) == 1
+
+
+def test_incomplete_lane_prevents_duplicate_creation_and_recovers_readback(env,monkeypatch):
+    original=env.notion.create_page;created=[];first=[True]
+    def create(parent,title,records,text=''):
+        page=original(parent,title,records,text);created.append({'id':page,'title':title})
+        if first[0]:
+            first[0]=False
+            raise RuntimeError('Response lost after remote creation')
+        return page
+    monkeypatch.setattr(env.notion,'create_page',create)
+    monkeypatch.setattr(env.notion,'child_pages',lambda parent:list(created),raising=False)
+    with pytest.raises(RuntimeError):env.engine.create_lane('parent',{'order':'largest'},'Recovery')
+    pending=next(x for x in env.store.lanes() if x['state']=='setup')
+    with pytest.raises(ValueError,match='incomplete'):env.engine.create_lane('parent',{'order':'largest'},'Duplicate')
+    ready=env.engine.finish_lane_setup(pending)
+    assert ready['state']=='waiting_hello'
+    assert len(created)==4
+    original_key='create:'+ready['route_token']+':inbox'
+    assert env.store.operation_record(original_key)['status']=='uncertain'
+    assert env.store.get('lane-setup-resolution:'+original_key)['result']==created[0]['id']
+    assert env.store.pending_operations()==[]
+
+
+def test_missing_uncertain_page_requires_owner_authorization(env,monkeypatch):
+    original=env.notion.create_page;fail=[True];created=[]
+    def create(parent,title,records,text=''):
+        if fail[0]:
+            fail[0]=False
+            raise RuntimeError('Unknown send outcome')
+        page=original(parent,title,records,text);created.append({'id':page,'title':title});return page
+    monkeypatch.setattr(env.notion,'create_page',create)
+    monkeypatch.setattr(env.notion,'child_pages',lambda parent:list(created),raising=False)
+    with pytest.raises(RuntimeError):env.engine.create_lane('parent',{'order':'largest'},'Missing')
+    pending=next(x for x in env.store.lanes() if x['state']=='setup')
+    with pytest.raises(UncertainOperation,match='confirmation'):env.engine.finish_lane_setup(pending)
+    assert created==[]
+    ready=env.engine.finish_lane_setup(pending,retry_missing=True)
+    assert ready['state']=='waiting_hello' and len(created)==4
+    key='create:'+ready['route_token']+':inbox'
+    assert env.store.operation_record(key)['status']=='uncertain'
+    assert env.store.get('lane-setup-resolution:'+key)['owner_authorized_missing_retry'] is True
+    assert env.store.pending_operations()==[]
+
+
+def test_pre_send_busy_can_resume_same_lane_without_uncertain_retry(env,monkeypatch):
+    from fnv_relay.store import OperationNotStarted
+    original=env.notion.create_page;fail=[True]
+    def create(*args,**kwargs):
+        if fail[0]:fail[0]=False;raise OperationNotStarted('busy before send')
+        return original(*args,**kwargs)
+    monkeypatch.setattr(env.notion,'create_page',create)
+    with pytest.raises(OperationNotStarted):env.engine.create_lane('parent',{'order':'largest'},'Busy')
+    pending=next(x for x in env.store.lanes() if x['state']=='setup')
+    assert env.store.pending_operations()==[]
+    ready=env.engine.finish_lane_setup(pending)
+    assert ready['state']=='waiting_hello'
