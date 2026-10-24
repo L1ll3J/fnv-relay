@@ -24,19 +24,20 @@ Defaults are `~/.local/share/fnv-relay-tools` for installed tools and `~/.local/
 
 This repository ships code only. The Microsoft compiler/ISO, checker downloads and game remain outside the repository and must not be bundled into release archives.
 
-## Authorize Notion
+## Finish guided setup
 
-Create a Notion internal connection with permission to read, insert and update content, then share your chosen parent page with that connection. Store its token through the CLI's hidden terminal prompt:
+Run the guided account/page setup. It reuses the FNV key created by bootstrap, explains Notion internal connection creation and page sharing, collects its token with a hidden prompt, verifies your private parent, and can create your first lane:
 
 ```bash
 CLI="$HOME/.local/share/fnv-relay-tools/venv/bin/fnv-relay"
-"$CLI" auth notion login
+"$CLI" setup
 "$CLI" doctor
+"$CLI" start
 ```
 
 If you selected a custom state directory, add `--state-dir '/your/state'` before the subcommand on every CLI command. Keep tokens out of shell arguments, page content and chat messages.
 
-**ChatGPT needs its own Notion connection and access to the relay pages.** The CLI's internal connection does not authorize ChatGPT automatically. Connect Notion in ChatGPT and approve the pages separately before giving a worker its lane prompt. See the main README for lane creation and serving.
+**ChatGPT needs its own Notion connection and access to the relay pages.** The CLI's internal connection does not authorize ChatGPT automatically. Connect Notion in ChatGPT and approve the pages separately before giving a worker its lane prompt. Paste the wizard's starter prompt into that connected conversation. Check `"$CLI" status` for progress; use `"$CLI" stop` to release tracked claims and exit safely, or `"$CLI" drain` to finish current work first. Restarting continues saved work on unpaused lanes. Manually paused lanes require `"$CLI" lane resume "My lane"`.
 
 ## Existing prerequisites or retained ISO
 

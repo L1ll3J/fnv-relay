@@ -1,6 +1,6 @@
 # Discord quick start
 
-Welcome samurai o7 — this is **fnv-relay 0.1 preview**, a local bridge for working on FNV decompilation from your own ChatGPT web account through a private Notion lane.
+Welcome samurai o7 — this is **fnv-relay 0.2 preview**, a local bridge for working on FNV decompilation from your own ChatGPT web account through a private Notion lane.
 
 Your web agent writes candidates in Notion. The relay on your machine checks them with the official compiler and your own game executable, then submits only independently verified local `MATCH` results. Claims and credit stay with your FNV account. No model API key or separate Codex subscription is required by the relay; your ChatGPT plan, tool access, and usage limits still apply.
 
@@ -15,7 +15,7 @@ You need Ubuntu/Linux (Ubuntu WSL2 is the initial target), Python 3.11.8+, Wine 
    fnv-relay init
    ```
 
-2. Get your own FNV key through browser approval and download the official checker/shared files:
+2. After the [Ubuntu/WSL2 bootstrap](BOOTSTRAP.md), run `fnv-relay setup`. It connects FNV through browser approval, walks you through a private Notion internal connection, saves your verified parent page, and can create a first lane with a starter prompt. Connect Notion separately in ChatGPT. If you prefer manual setup, get your own FNV key and shared tools:
 
    ```sh
    fnv-relay auth fnv connect --label my-relay
@@ -29,11 +29,11 @@ You need Ubuntu/Linux (Ubuntu WSL2 is the initial target), Python 3.11.8+, Wine 
    fnv-relay lane create --parent-page 'YOUR_PRIVATE_PARENT_URL_OR_UUID' --label first-lane
    fnv-relay lane list
    fnv-relay lane prompt ROUTE
-   fnv-relay serve
+   fnv-relay start
    ```
 
    Replace `ROUTE` with your lane's route. Paste the generated prompt into ChatGPT with Notion access. Starting the relay authorizes live FNV claims and submissions under your account.
-4. Check `fnv-relay status`; use `fnv-relay stop` to request a drain when finished.
+4. Check `fnv-relay status`; use `fnv-relay stop` to release tracked claims and exit safely. Use `fnv-relay drain` to finish current work first. Ctrl+C also requests safe release. Pending/uncertain claims remain reserved for review, so read the shutdown summary. Restarting continues saved work on unpaused lanes; use `lane resume "My lane"` for a manually paused lane. Continuation stays on its unfinished function.
 
 Keep tokens, private page links, game bytes, project context, candidate source, and traces out of Discord and public releases. Follow the [official FNV instructions](https://fnvdecomp.com/agents.md) and [contributor terms](https://fnvdecomp.com/legal.html).
 

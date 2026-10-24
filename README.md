@@ -2,7 +2,7 @@
 
 A local bridge between your own ChatGPT web conversation, a private Notion workspace, and [fnvdecomp](https://fnvdecomp.com/agents.md).
 
-**0.1 preview:** initial target is Ubuntu/Linux, including Ubuntu on WSL2. Native Windows support has not been verified. Complete the setup and health checks before starting work; preview tests are not evidence of a successful live contribution.
+**0.2 preview:** initial target is Ubuntu/Linux, including Ubuntu on WSL2. Native Windows support has not been verified. Complete the setup and health checks before starting work; preview tests are not evidence of a successful live contribution.
 
 The web agent reads a lane in Notion and writes C++ candidates there. Your local relay retrieves them, runs the official checker with your own game executable and compiler, and submits only independently checked `MATCH` results under your FNV account. The relay has no model API dependency and uses no third-party coordination server. You normally do not need to forward source files by hand.
 
@@ -26,7 +26,24 @@ python3 -m venv .venv
 .venv/bin/fnv-relay --help
 ```
 
+After [Ubuntu/WSL2 bootstrap](docs/BOOTSTRAP.md), run `fnv-relay setup` to connect your accounts, verify a private Notion parent, and optionally create your first lane. Then run `fnv-relay start`.
+
+Common commands:
+
+```sh
+fnv-relay status                 # readable lane/function progress
+fnv-relay stop                   # release owned claims and exit safely
+fnv-relay drain                  # finish current work, then exit
+fnv-relay lane pause "My lane"
+fnv-relay lane resume "My lane"
+fnv-relay status --json          # machine-readable status
+```
+
+`start` runs in the foreground. Ctrl+C, SIGTERM and terminal hangup request release and cleanup; allow the current compiler process to finish. An unresolved submission or release is reported as pending, with its reservation retained. Restarting continues an unpaused lane's saved function; manually paused lanes require `lane resume`.
+
 Follow [Setup](docs/SETUP.md) for browser approval with `auth fnv connect`, official downloads with `tools fetch`, the game/toolchain paths, Notion authentication, health checks, and your first lane. [Discord quick start](docs/DISCORD.md) is a short introduction you can share. [Validation and preview boundaries](docs/VALIDATION.md) distinguishes tested behavior from remaining limitations.
+
+See [ChatGPT plans and connection checks](docs/SUBSCRIPTIONS.md) before choosing a subscription. Pro is not a relay requirement; actual Notion read/write access is.
 
 ## Data and ownership
 

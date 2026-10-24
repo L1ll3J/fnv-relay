@@ -58,7 +58,7 @@ class FakeProject:
             if self.fail_submit:
                 raise RuntimeError("Ambiguous write failure")
             self.open = [row for row in self.open if row["claim_id"] != args["claim_id"]]
-            return {"submission_id": "submission-1"}
+            return {"submission_id": "sub_fixture1", "state": "queued for verification (fixture)"}
         if tool == "giveup":
             self.open = [row for row in self.open if row["claim_id"] != args["claim_id"]]
             return {"released": True}
@@ -153,7 +153,7 @@ def test_hello_context_multicandidate_match_plain_submit_and_next_claim(env):
     post_batch(env, [candidate(env, "try-1", "int target(){return 41;}"), candidate(env, "try-2", "int target(){return 42;}")])
     env.engine.poll()
     submits = [args for tool, args in env.project.calls if tool == "submit"]
-    assert submits == [{"claim_id": "claim-1", "source": "int target(){return 42;}"}]
+    assert submits == [{"claim_id": "claim-1", "source": "int target(){return 42;}", "model":"ChatGPT Web via Notion"}]
     assert [row["plain"] for row in env.checker.calls] == [False, False, True]
     assert env.checker.calls[-1]["source_path"] != env.checker.calls[-2]["source_path"]
     assert env.checker.calls[-1]["work"] != env.checker.calls[-2]["work"]

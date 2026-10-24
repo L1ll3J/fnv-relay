@@ -210,3 +210,34 @@ def test_configured_source_limit_is_applied(inputs, monkeypatch):
     with pytest.raises(compiler.CompilerError, match="1..4"):
         compiler.check(cfg, pack, source, work)
     assert calls == []
+
+
+def test_cancellation_reaps_owned_child_and_retains_logs(tmp_path, monkeypatch):
+    import sys
+    from fnv_relay import compiler
+    real_popen = compiler.subprocess.Popen
+    children = []
+
+    class InterruptedProcess:
+        def __init__(self, *args, **kwargs):
+            self.child = real_popen(*args, **kwargs)
+            self.pid = self.child.pid
+            self.first_wait = True
+            children.append(self.child)
+
+        def wait(self, *args, **kwargs):
+            if self.first_wait:
+                self.first_wait = False
+                raise KeyboardInterrupt()
+            return self.child.wait(*args, **kwargs)
+
+        @property
+        def returncode(self):
+            return self.child.returncode
+
+    monkeypatch.setattr(compiler.subprocess, 'Popen', InterruptedProcess)
+    with pytest.raises(KeyboardInterrupt):
+        compiler._run([sys.executable,'-c','import time; time.sleep(60)'], {}, 90, tmp_path)
+    assert len(children) == 1 and children[0].poll() is not None
+    assert (tmp_path/'interrupted.stdout.log').exists()
+    assert (tmp_path/'interrupted.stderr.log').exists()

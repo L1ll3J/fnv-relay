@@ -25,3 +25,11 @@ Current boundaries:
 No game/compiler binaries, original project sources, candidate examples, private state, credentials, or live Notion links are included in the release. Test sources and services are synthetic.
 
 Run the offline checks with `python -m pip install '.[test]'` followed by `python -m pytest -q`. These tests make no model API requests.
+
+## 0.2 lifecycle update
+
+The expanded offline suite passes 157 tests. It covers safe release and same-address continuation with fresh context, definitive cooldowns versus uncertain writes, owner-process death/PID reuse, stale watcher snapshots, pause/resume, shutdown summaries and model attribution. Real subprocess tests deliver SIGINT, SIGTERM and SIGHUP to a synthetic controller and verify tracked-claim cleanup. A separate cancellation test verifies the owned child process group is terminated and reaped. These tests use synthetic services and make no model or project API calls.
+
+`stop` now releases tracked claims rather than only draining. Use `drain` to finish existing tasks. Human-readable `status` is the default; scripts should use `status --json`. Same-function continuation does not renew a lease: it releases, respects project availability/cooldowns, then obtains a fresh assignment. Following accepted submission, one next-task admission is permitted without waiting for verification; no receipt is called a verified contribution.
+
+Catchable exits perform cleanup; an independent guardian can release after abrupt controller death while the computer stays online. Power loss or unavailable project networking can prevent release. Pending/uncertain operations are explicitly retained and never reported as successfully released. Best sources larger than the project's 64 KiB near-miss safety ceiling remain local rather than being discarded or truncated.

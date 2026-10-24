@@ -16,8 +16,10 @@ import shutil
 import subprocess
 import sys
 import time
+import signal
+import threading
 
-from . import __version__, authentication, compiler, tools
+from . import __version__, authentication, compiler, presentation, setup, tools
 from .engine import BANDS, Engine
 from .notion import Notion, NotionError, page_id
 from .project import FNV, ProjectError
@@ -34,6 +36,7 @@ def parser():
     commands = root.add_subparsers(dest="command", required=True)
     init = commands.add_parser("init", help="Initialize private local state")
     init.add_argument("--state-dir", default=argparse.SUPPRESS)
+    commands.add_parser("setup", help="Guided account and private Notion page setup")
     config = commands.add_parser("config", help="Set local input paths and bounded runtime options")
     for name in PATHS:
         config.add_argument("--" + name.replace("_", "-"))
@@ -52,19 +55,31 @@ def parser():
     doctor.add_argument("--prepare-wine", action="store_true", help="Explicitly initialize the configured dedicated Wine prefix")
     lane = commands.add_parser("lane").add_subparsers(dest="lane_action", required=True)
     create = lane.add_parser("create", help="Create private Notion lane pages")
-    create.add_argument("--parent-page", required=True)
+    create.add_argument("--parent-page", help="Default: parent saved by setup")
+    create.add_argument("--auto-resume", action=argparse.BooleanOptionalAction, default=True, help="Continue unfinished function after release when agent activity is recent")
     create.add_argument("--order", choices=("largest", "smallest"), default="largest")
     create.add_argument("--band", choices=BANDS)
     create.add_argument("--address")
     create.add_argument("--min-bytes", type=int, default=0)
     create.add_argument("--max-bytes", type=int, default=2**31 - 1)
     create.add_argument("--label", default="Pro lane")
+    create.add_argument("--model-label", default="ChatGPT Web via Notion", help="Human-confirmed model attribution; otherwise use the truthful route label")
     lane.add_parser("list")
     lane.add_parser("prompt").add_argument("route")
-    serve = commands.add_parser("serve", help="Run live work under your FNV account")
+    for action in ("pause", "resume"):
+        control = lane.add_parser(action)
+        control.add_argument("route", help="Full route, unique prefix (4+ characters), or exact label")
+        if action == "pause":
+            control.add_argument("--release", action="store_true", help="Also release the current claim, retaining continuation")
+    serve = commands.add_parser("serve", aliases=["start"], help="Run live work under your FNV account")
     serve.add_argument("--once", action="store_true")
-    commands.add_parser("status", help="Summarize local state without secrets")
-    commands.add_parser("stop", help="Drain: stop assigning, finish or release existing work")
+    status = commands.add_parser("status", help="Human-readable local status")
+    status.add_argument("--json", action="store_true", help="Stable machine-readable status")
+    status.add_argument("--refresh", action="store_true", help="Also fetch read-only FNV account totals")
+    commands.add_parser("logs", help="Recent sanitized event summaries").add_argument("--tail", type=int, default=20)
+    stop = commands.add_parser("stop", aliases=["shutdown"], help="Release tracked claims and stop the worker safely")
+    stop.add_argument("--timeout", type=float, default=15, help="Wait at most this many seconds for a running worker (0–120)")
+    commands.add_parser("drain", help="Finish current claims without assigning more")
     commands.add_parser("reconcile", help="List uncertain writes; never retry or clear them")
     return root
 
@@ -85,7 +100,9 @@ def policy(args):
         raise ValueError("Invalid address")
     if not args.label.strip() or len(args.label) > 100 or any(ord(c) < 32 for c in args.label):
         raise ValueError("Invalid label")
-    result = {"order": args.order, "min_bytes": args.min_bytes, "max_bytes": args.max_bytes}
+    if not args.model_label.strip() or len(args.model_label) > 100 or any(ord(c) < 32 for c in args.model_label):
+        raise ValueError("Invalid model label")
+    result = {"model_label": args.model_label.strip(), "order": args.order, "min_bytes": args.min_bytes, "max_bytes": args.max_bytes, "auto_resume_unfinished": args.auto_resume}
     if args.band:
         result["band"] = args.band
     if args.address:
@@ -190,17 +207,26 @@ def summary(lane):
 
 def lane_command(store, args):
     if args.lane_action == "list":
-        output([summary(lane) for lane in store.lanes()])
+        print(presentation.human_status(presentation.snapshot(store, __version__)))
     elif args.lane_action == "prompt":
-        lane = store.lane(args.route)
-        if not lane or not lane.get("landing"):
-            raise ValueError("Unknown or incomplete lane")
-        print("Welcome samurai o7. Read https://www.notion.so/" + page_id(lane["landing"]).replace("-", "") + ".")
-        print("Register using the exact HELLO record on that landing page for route " + lane["route_token"] + ".")
-        print("Read future assignments and results from its outbox. Follow the current assignment's schemas and scope. Keep original context private and use Notion for candidates and messages; the local controller checks and submits. Never request or post credentials. If you cannot access the pages, tell your human.")
+        lane = presentation.resolve_lane(store, args.route)
+        if not lane.get("landing"):
+            raise ValueError("Incomplete lane")
+        print(presentation.starter_prompt(lane))
+    elif args.lane_action in ("pause", "resume"):
+        lane = presentation.resolve_lane(store, args.route)
+        key = store.secrets().get("fnv_api_key", "")
+        project = FNV(key) if args.lane_action == "pause" and args.release else None
+        engine = Engine(store, project, None, watchdog=False)
+        if args.lane_action == "pause":
+            engine.pause_lane(lane["route_token"], release=args.release)
+            print("Lane paused." + (" Current claim release requested." if args.release else " Current claim may finish; no new claim will be assigned."))
+        else:
+            engine.resume_lane(lane["route_token"])
+            print("Lane resumed. Start the worker if it is stopped.")
     else:
         selected = policy(args)
-        parent = page_id(args.parent_page)
+        parent = page_id(args.parent_page or store.config().get("notion_parent_page", ""))
         project, notion = clients(store)
         with store.lock("lane-create"):
             lane = Engine(store, project, notion).create_lane(parent, selected, args.label)
@@ -231,33 +257,107 @@ def account_lock(key):
         os.close(fd)
 
 
+@contextmanager
+def shutdown_signals(event):
+    previous = {}
+    try:
+        for name in ("SIGINT", "SIGTERM", "SIGHUP"):
+            signum = getattr(signal, name, None)
+            if signum is not None:
+                previous[signum] = signal.getsignal(signum)
+                signal.signal(signum, lambda *_: event.set())
+        yield
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+
+def release_report(store, engine, reason):
+    try:
+        result = engine.release_all(reason)
+        if not isinstance(result, dict) or not isinstance(result.get("counts"), dict):
+            raise ValueError("Invalid release summary")
+    except Exception:
+        result = {"counts": {"released": 0, "pending": max(1, sum(bool(row.get("lease")) for row in store.lanes())), "uncertain": len(store.pending_operations())}}
+    store.set("last_shutdown", result)
+    counts = result["counts"]
+    released, pending, uncertain = (counts.get(key, 0) for key in ("released", "pending", "uncertain"))
+    expired = counts.get("expired", 0)
+    print(f"Shutdown: {released} released, {pending} pending, {uncertain} uncertain, {expired} already expired.")
+    if pending or uncertain:
+        print("Unresolved claims remain protected by their guardian/reservation. Inspect status and reconcile; do not assume they were released.")
+    return 1 if pending or uncertain else 0
+
+
 def serve(store, once=False):
     project, notion = clients(store)
     if not all(host_checks(store.config().get("paths", {})).values()):
         raise ValueError("Toolchain or isolation health check failed")
     project.call("status", {})
     notion.whoami()
-    engine = Engine(store, project, notion)
     interval = store.config().get("poll_seconds", 5)
     if not isinstance(interval, (int, float)) or not 1 <= interval <= 60:
         raise ValueError("Invalid poll interval")
+    event = threading.Event()
     with store.lock("serve"), account_lock(store.secrets().get("fnv_api_key", "")):
         if store.pending_operations():
             raise UncertainOperation("Reconciliation required")
+        engine = Engine(store, project, notion, should_stop=event.is_set)
         store.set("drain", False)
+        store.set("shutdown_requested", False)
+        for lane in store.lanes():
+            if lane.get("resume") and not lane.get("paused"):
+                engine.resume_lane(lane["route_token"])
+        store.set("worker", {"pid": os.getpid(), "running": True, "started_at": time.time()})
+        code = 0
+        with shutdown_signals(event):
+            try:
+                while not event.is_set() and not store.get("shutdown_requested"):
+                    engine.poll()
+                    if once or store.get("drain") and not any(row.get("lease") for row in store.lanes()):
+                        break
+                    event.wait(interval)
+            except KeyboardInterrupt:
+                event.set()
+                code = 130
+            finally:
+                store.set("shutdown_requested", True)
+                store.set("drain", True)
+                cleanup_code = release_report(store, engine, "Owner stopped relay; preserve checked work for continuation")
+                store.set("worker", {"pid": os.getpid(), "running": False, "stopped_at": time.time()})
+        return code or cleanup_code
+
+
+def stop(store, timeout=15):
+    if not 0 <= timeout <= 120:
+        raise ValueError("Invalid stop timeout")
+    store.set("shutdown_requested", True)
+    store.set("drain", True)
+    deadline = time.monotonic() + timeout
+    while True:
         try:
-            while True:
-                engine.poll()
-                if once:
-                    break
-                if store.get("drain") and not any(row.get("lease") for row in store.lanes()):
-                    break
-                time.sleep(interval)
-        except KeyboardInterrupt:
-            store.set("drain", True)
-            print("Drain requested. Run serve again to resume unfinished work; claim watchdogs remain responsible for lease deadlines.")
-            return 130
-    return 0
+            with store.lock("serve"):
+                previous = store.get("worker") or {}
+                if previous.get("running") is False and store.get("last_shutdown"):
+                    counts = store.get("last_shutdown")["counts"]
+                    if not any(row.get("lease") for row in store.lanes()) and not store.pending_operations():
+                        print("Worker stopped; no tracked active claims remain.")
+                        return 1 if counts.get("pending") or counts.get("uncertain") else 0
+                if not any(row.get("lease") for row in store.lanes()) and not store.pending_operations():
+                    store.set("worker", {"running": False, "stopped_at": time.time()})
+                    print("Stopped; no tracked active claims remain.")
+                    return 0
+                key = store.secrets().get("fnv_api_key", "")
+                with account_lock(key):
+                    result = release_report(store, Engine(store, FNV(key), None, watchdog=False), "Owner requested offline shutdown")
+                    store.set("worker", {"running": False, "stopped_at": time.time()})
+                    return result
+        except AlreadyRunning:
+            if time.monotonic() >= deadline:
+                pending = sum(bool(row.get("lease")) for row in store.lanes())
+                print(f"Shutdown requested; worker is still stopping. Tracked active claims: {pending}. Check status shortly.")
+                return 1
+            time.sleep(min(0.25, max(0, deadline - time.monotonic())))
 
 
 def run(args, store):
@@ -265,6 +365,8 @@ def run(args, store):
         if not (store.root / "config.json").exists():
             store.set_config(store.config())
         print("Private local state initialized.")
+    elif args.command == "setup":
+        setup.wizard(store)
     elif args.command == "config":
         configure(store, args)
     elif args.command == "auth":
@@ -281,16 +383,41 @@ def run(args, store):
         return doctor(store, args.prepare_wine)
     elif args.command == "lane":
         lane_command(store, args)
-    elif args.command == "serve":
+    elif args.command in ("serve", "start"):
         return serve(store, args.once)
-    elif args.command == "stop":
+    elif args.command in ("stop", "shutdown"):
+        return stop(store, args.timeout)
+    elif args.command == "drain":
         store.set("drain", True)
-        print("Drain requested; inspect status before closing the worker terminal.")
+        print("Draining: current claims may finish; no new claims will be assigned.")
     elif args.command == "reconcile":
         output({"uncertain_operations": store.pending_operations(), "action": "Review service state before any retry; this command does not mutate or retry operations."})
+    elif args.command == "logs":
+        events = store.events(args.tail)
+        for event in events:
+            data = event.get("data") or {}
+            kind = event.get("kind", "event")
+            kind = kind if isinstance(kind, str) and re.fullmatch(r"[a-z_]{1,60}", kind) else "event"
+            fields = []
+            for field in ("route_token", "claim_id", "status"):
+                value = data.get(field)
+                if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,150}", value):
+                    fields.append(field + "=" + value[:40])
+            print(str(event.get("id", "-")) + " " + kind + (" " + " ".join(fields) if fields else ""))
+        if not events:
+            print("No recent events.")
     elif args.command == "status":
-        secrets = store.secrets()
-        output({"version": __version__, "drain": bool(store.get("drain")), "credentials_configured": {"fnv": bool(secrets.get("fnv_api_key")), "notion": bool(secrets.get("notion_token"))}, "lanes": [summary(lane) for lane in store.lanes()], "uncertain_operations": len(store.pending_operations())})
+        data = presentation.snapshot(store, __version__)
+        if args.refresh:
+            account = FNV(store.secrets().get("fnv_api_key", "")).call("status", {})
+            safe_account = {field: account.get(field) if type(account.get(field)) is int else None for field in ("verified_bytes", "submissions_today", "awaiting_verification")}
+            safe_account["open_claims"] = len(account.get("open_claims", []))
+            safe_account["this_key_open_claims"] = sum(bool(row.get("this_key")) for row in account.get("open_claims", []))
+            data["account"] = safe_account
+        if args.json:
+            output(data)
+        else:
+            print(presentation.human_status(data))
     return 0
 
 
@@ -302,15 +429,18 @@ def main(argv=None):
         return run(args, store)
     except authentication.ConnectionError as exc:
         print(str(exc), file=sys.stderr)
-    except authentication.ConnectionError as exc:
-        print(str(exc), file=sys.stderr)
     except AlreadyRunning:
         print("Another relay command holds the worker lock.", file=sys.stderr)
     except UncertainOperation:
         print("An uncertain external operation requires review. Run reconcile; no automatic retry was made.", file=sys.stderr)
     except (ProjectError, NotionError) as exc:
         # Codes and text returned by a service are not trusted terminal output.
-        print("Remote service request failed" + (f" (HTTP {exc.status})" if exc.status else "") + "; inspect authentication, permissions and service status.", file=sys.stderr)
+        if isinstance(exc, ProjectError) and exc.status == 401:
+            print("FNV authentication failed. Run fnv-relay auth fnv connect, or auth fnv login with a current key.", file=sys.stderr)
+        elif isinstance(exc, NotionError) and exc.status == 403:
+            print("Notion access was refused. Share the parent with your internal connection and check workspace block limits.", file=sys.stderr)
+        else:
+            print("Remote service request failed" + (f" (HTTP {exc.status})" if exc.status else "") + "; inspect authentication, permissions and service status.", file=sys.stderr)
     except ValueError:
         print("Invalid input or configuration. Check --help, paths, byte bounds and credentials.", file=sys.stderr)
     except KeyboardInterrupt:

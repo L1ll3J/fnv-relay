@@ -234,3 +234,14 @@ def test_nonblocking_process_lock(tmp_path):
             pass
     one.close()
     two.close()
+
+
+def test_event_log_is_bounded_and_chronological(tmp_path):
+    from fnv_relay.store import Store
+    store = Store(tmp_path/'events')
+    for i in range(5):
+        store.event('fixture', {'value':i})
+    assert [row['data']['value'] for row in store.events(2)] == [3,4]
+    with pytest.raises(ValueError):
+        store.events(201)
+    store.close()

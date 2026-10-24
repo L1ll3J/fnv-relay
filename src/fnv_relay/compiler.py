@@ -119,8 +119,24 @@ def _run(argv: list[str], env: dict, timeout: float, cwd: Path) -> tuple[int, by
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
-            os.killpg(proc.pid, signal.SIGKILL)
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             proc.wait()
+        except BaseException:
+            # The compiler is our child process group; never leave it orphaned
+            # when cancellation interrupts the wait. Retain available diagnostics.
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait()
+            output.seek(0)
+            errors.seek(0)
+            (cwd / "interrupted.stdout.log").write_bytes(output.read())
+            (cwd / "interrupted.stderr.log").write_bytes(errors.read())
+            raise
         output.seek(0)
         errors.seek(0)
         return proc.returncode, output.read(), errors.read(), timed_out

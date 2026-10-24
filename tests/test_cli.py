@@ -71,7 +71,7 @@ def test_lane_create_passes_validated_policy(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "Engine", Mock(return_value=engine))
     parent = "12345678-1234-1234-1234-123456789abc"
     assert call(tmp_path, "lane", "create", "--parent-page", parent, "--address", "0x1234", "--min-bytes", "8", "--max-bytes", "20") == 0
-    engine.create_lane.assert_called_once_with(parent, {"order": "largest", "min_bytes": 8, "max_bytes": 20, "address": "0x1234"}, "Pro lane")
+    engine.create_lane.assert_called_once_with(parent, {"order": "largest", "min_bytes": 8, "max_bytes": 20, "address": "0x1234", "auto_resume_unfinished": True, "model_label": "ChatGPT Web via Notion"}, "Pro lane")
 
 
 def test_status_and_errors_do_not_echo_credentials(tmp_path, monkeypatch, capsys):
@@ -94,8 +94,10 @@ def test_serve_once_and_stop(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "account_lock", lambda key: nullcontext())
     engine = Mock()
     monkeypatch.setattr(cli, "Engine", Mock(return_value=engine))
+    engine.release_all.return_value = {"counts": {"released": 0, "pending": 0, "uncertain": 0}}
     assert call(tmp_path, "serve", "--once") == 0
     engine.poll.assert_called_once_with()
+    engine.release_all.assert_called_once()
     assert call(tmp_path, "stop") == 0
     store = Store(tmp_path)
     try:
@@ -184,3 +186,124 @@ def test_owner_credential_replacement_refused_while_lease_exists(tmp_path, monke
     with pytest.raises(ValueError):
         cli.run(cli.parser().parse_args(['auth','fnv','connect']),store)
     store.close()
+
+
+@pytest.mark.parametrize("failure", [None, KeyboardInterrupt(), RuntimeError("private error body")])
+def test_worker_cleanup_on_all_owned_exit_paths(tmp_path, monkeypatch, failure):
+    monkeypatch.setattr(cli, "clients", lambda store: (Mock(), Mock()))
+    monkeypatch.setattr(cli, "host_checks", lambda paths: {"ready": True})
+    monkeypatch.setattr(cli, "account_lock", lambda key: nullcontext())
+    engine = Mock()
+    engine.release_all.return_value = {"counts": {"released": 1, "pending": 0, "uncertain": 0}}
+    if failure:
+        engine.poll.side_effect = failure
+    factory = Mock(return_value=engine)
+    monkeypatch.setattr(cli, "Engine", factory)
+    result = call(tmp_path, "start", "--once")
+    assert result == (130 if isinstance(failure, KeyboardInterrupt) else 1 if failure else 0)
+    engine.release_all.assert_called_once()
+    assert callable(factory.call_args.kwargs["should_stop"])
+    store = Store(tmp_path)
+    try:
+        assert store.get("worker")["running"] is False
+    finally:
+        store.close()
+
+
+def test_shutdown_signal_sets_event_only_and_restores_handlers(monkeypatch):
+    handlers, previous = {}, {}
+    monkeypatch.setattr(cli.signal, "getsignal", lambda sig: previous.setdefault(sig, object()))
+    monkeypatch.setattr(cli.signal, "signal", lambda sig, handler: handlers.update({sig: handler}))
+    event = cli.threading.Event()
+    with cli.shutdown_signals(event):
+        for sig in previous:
+            handlers[sig](sig, None)
+            assert event.is_set()
+            event.clear()
+    assert handlers == previous
+
+
+def test_offline_shutdown_uses_fnv_without_notion_and_reports_pending(tmp_path, monkeypatch, capsys):
+    store = Store(tmp_path)
+    store.set_secret("fnv_api_key", "owner-key")
+    store.put_lane({"route_token": "route", "lease": {"claim_id": "claim"}})
+    store.close()
+    monkeypatch.setattr(cli, "account_lock", lambda key: nullcontext())
+    notion = Mock(side_effect=AssertionError("Notion must not be required"))
+    monkeypatch.setattr(cli, "Notion", notion)
+    engine = Mock()
+    engine.release_all.return_value = {"counts": {"released": 0, "pending": 1, "uncertain": 1}}
+    factory = Mock(return_value=engine)
+    monkeypatch.setattr(cli, "Engine", factory)
+    assert call(tmp_path, "shutdown", "--timeout", "0") == 1
+    assert factory.call_args.args[2] is None
+    notion.assert_not_called()
+    assert "1 pending, 1 uncertain" in capsys.readouterr().out
+
+
+def test_stop_requests_running_worker_without_competing_release(tmp_path, monkeypatch):
+    store = Store(tmp_path)
+    engine = Mock()
+    monkeypatch.setattr(cli, "Engine", engine)
+    try:
+        with store.lock("serve"):
+            assert call(tmp_path, "stop", "--timeout", "0") == 1
+        assert store.get("shutdown_requested") is True
+        engine.assert_not_called()
+    finally:
+        store.close()
+
+
+def test_human_status_json_and_unique_lane_resolution(tmp_path, capsys):
+    store = Store(tmp_path)
+    store.put_lane({"route_token": "abcd-unique", "label": "My lane", "state": "resume_pending", "paused": True, "resume": {"not_before": 123}, "policy": {"auto_resume_unfinished": True}})
+    assert cli.presentation.resolve_lane(store, "My lane")["route_token"] == "abcd-unique"
+    assert cli.presentation.resolve_lane(store, "abcd")["label"] == "My lane"
+    store.put_lane({"route_token": "abcd-other", "label": "My lane", "state": "idle"})
+    with pytest.raises(ValueError):
+        cli.presentation.resolve_lane(store, "My lane")
+    store.close()
+    assert call(tmp_path, "status") == 0
+    human = capsys.readouterr().out
+    assert "LANE / ROUTE" in human and "paused" in human and "retry after" in human
+    assert call(tmp_path, "status", "--json") == 0
+    assert json.loads(capsys.readouterr().out)["schema_version"] == 1
+
+
+
+def test_logs_are_sanitized_and_refresh_separates_account_totals(tmp_path, monkeypatch, capsys):
+    store = Store(tmp_path)
+    store.set_secret("fnv_api_key", "secret-key")
+    store.event("check_complete", {"claim_id": "claim-1", "status": "diff", "source_utf8": "private source", "message": "secret-key", "code": "private code"})
+    store.close()
+    assert call(tmp_path, "logs", "--tail", "1") == 0
+    shown = capsys.readouterr().out
+    assert "claim-1" in shown and "diff" in shown
+    assert "private" not in shown and "secret-key" not in shown
+    project = Mock()
+    project.call.return_value = {"verified_bytes": 100, "open_claims": [{"this_key": True}, {"this_key": False}], "submissions_today": 2, "awaiting_verification": 1, "raw": "private source"}
+    monkeypatch.setattr(cli, "FNV", Mock(return_value=project))
+    assert call(tmp_path, "status", "--refresh", "--json") == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["account"]["open_claims"] == 2
+    assert report["account"]["this_key_open_claims"] == 1
+    assert report["lanes"] == []
+    assert "private source" not in json.dumps(report)
+
+
+
+def test_start_grants_continuation_without_unpausing_manual_pause(tmp_path, monkeypatch):
+    store = Store(tmp_path)
+    store.put_lane({"route_token": "continue", "state": "resume_pending", "resume": {"address": "0x1234"}})
+    store.put_lane({"route_token": "manual-pause", "paused": True, "state": "resume_pending", "resume": {"address": "0x5678"}})
+    store.close()
+    monkeypatch.setattr(cli, "clients", lambda store: (Mock(), Mock()))
+    monkeypatch.setattr(cli, "host_checks", lambda paths: {"ready": True})
+    monkeypatch.setattr(cli, "account_lock", lambda key: nullcontext())
+    engine = Mock()
+    engine.release_all.return_value = {"counts": {"released": 0, "pending": 0, "uncertain": 0}}
+    monkeypatch.setattr(cli, "Engine", Mock(return_value=engine))
+    assert call(tmp_path, "start", "--once") == 0
+    engine.resume_lane.assert_called_once_with("continue")
+    args = cli.parser().parse_args(["lane", "create", "--model-label", "GPT-confirmed via Web"])
+    assert cli.policy(args)["model_label"] == "GPT-confirmed via Web"

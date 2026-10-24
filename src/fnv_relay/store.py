@@ -127,6 +127,13 @@ class Store:
     def event(self, kind, data):
         self.db.execute("INSERT INTO events(created,kind,data) VALUES (?,?,?)", (time.time(), kind, _json(data)))
 
+    def events(self, limit=20):
+        """Recent local events; callers choose which fields to display publicly."""
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("Event limit must be 1..200")
+        rows = self.db.execute("SELECT id,created,kind,data FROM events ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [{"id":row[0], "created":row[1], "kind":row[2], "data":json.loads(row[3])} for row in reversed(rows)]
+
     def operation_record(self, key):
         row = self.db.execute("SELECT key,args_hash,status,result,created,updated FROM operations WHERE key=?", (key,)).fetchone()
         if not row:
