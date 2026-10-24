@@ -378,6 +378,27 @@ class Engine:
 
     def batch(self, lane, message):
         self.scope(lane, message); mid = check_id(message['message_id']); pointers = message.get('candidates', [])
+        publication = 'batch:'+lane['lease']['claim_id']+':'+mid
+        binding_key = 'batch-input:'+publication
+        identity = sha(canonical(message))
+        bound = self.store.get(binding_key)
+        if bound and bound != identity: raise ValueError('Batch message identifier already bound to different content')
+        self.store.set(binding_key, identity)
+        saved = self.store.get('batch-result:'+publication)
+        if saved is not None:
+            self.publish(lane, publication, saved)
+            return
+        prior = self.store.operation_record('notion-append:'+publication)
+        if prior:
+            # Older runs did not save the result payload locally. Recover only
+            # the exact original record proven by the durable operation digest.
+            records = [r for r in self.notion.messages(lane['outbox'])
+                       if isinstance(r, dict) and r.get('message_id') == publication
+                       and sha(canonical(r)) == prior['args_hash']]
+            if not records: raise UncertainOperation('Saved batch publication requires exact outbox reconciliation; no checks replayed')
+            self.store.set('batch-result:'+publication, records[0]['payload'])
+            self.store.set('reconciled:'+publication, True)
+            return
         if not isinstance(pointers, list) or not 1 <= len(pointers) <= 8: raise ValueError('Batch must contain1–8 candidates')
         prepared = [self.candidate(lane, pointer) for pointer in pointers]
         if len({cid for cid, _ in prepared}) != len(prepared): raise ValueError('Duplicate candidate identifier within batch')
@@ -421,7 +442,8 @@ class Engine:
             for key in ('log_path', 'stderr_path'):
                 if result.get(key) and Path(result[key]).is_file(): files.append(Path(result[key]))
         payload['pages'] = self.upload(lane, lease['claim_id'], files) if files else []
-        self.publish(lane, 'batch:'+lease['claim_id']+':'+mid, payload)
+        self.store.set('batch-result:'+publication, payload)
+        self.publish(lane, publication, payload)
 
     def finalize(self, lane, source, digest):
         claim_id = lane['lease']['claim_id']

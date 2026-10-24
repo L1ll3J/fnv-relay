@@ -308,3 +308,40 @@ def test_web_giveup_cannot_release_claim_but_owner_shutdown_can(env):
     env.engine.release_all("Owner stopped relay")
     assert [args["claim_id"] for tool, args in env.project.calls if tool == "giveup"] == [claim_id]
     assert not lane(env).get("lease")
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_batch_readback_failure_recovers_original_result_without_rechecking(env, monkeypatch, legacy):
+    assign(env)
+    post_batch(env, [candidate(env, "retry", "int target(){return 41;}")])
+    original = env.notion.messages
+    failed = [False]
+    def messages(page):
+        rows = original(page)
+        if page == lane(env)["outbox"] and not failed[0] and any(r.get("payload", {}).get("status") == "BATCH_RESULT" for r in rows):
+            failed[0] = True
+            raise RuntimeError("Readback interrupted")
+        return rows
+    monkeypatch.setattr(env.notion, "messages", messages)
+    env.engine.poll()
+    assert failed[0] and len(env.checker.calls) == 1
+    if legacy:
+        env.store.db.execute("DELETE FROM kv WHERE key LIKE 'batch-result:%' OR key LIKE 'batch-input:%'")
+    env.engine.poll()
+    env.engine.poll()
+    results = [r for r in original(lane(env)["outbox"]) if r.get("payload", {}).get("status") == "BATCH_RESULT"]
+    assert len(results) == 1
+    assert len(env.checker.calls) == 1
+    assert not results[0]["payload"]["results"][0].get("reused_prior_result")
+    assert env.store.get("message:"+env.route+":batch-1")
+
+
+def test_changed_batch_input_still_rejected_after_saved_result(env):
+    assign(env)
+    first = candidate(env, "one", "int target(){return 41;}")
+    batch = message(env, "BATCH", "immutable", candidates=[first])
+    env.engine.batch(lane(env), batch)
+    changed = {**batch, "candidates":[candidate(env, "two", "int target(){return 40;}")]}
+    with pytest.raises(ValueError, match="already bound"):
+        env.engine.batch(lane(env), changed)
+    assert len(env.checker.calls) == 1
