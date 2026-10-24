@@ -23,7 +23,10 @@ def starter_prompt(lane):
             "Persistence and clever thinking will pay dividends here.\n\n"
             "[" + url + "](" + url + ")\n\n"
             "Read that landing page and register using route UUID `" + lane["route_token"] + "`, "
-            "following its HELLO instructions. Read future assignments and results from that lane’s outbox.")
+            "following its HELLO instructions. Read future assignments and results from that lane’s outbox.\n\n"
+            "You have my explicit approval to read, create and edit pages within this private Notion relay for this project, "
+            "including uploading candidate source code and relevant project context, posting HELLO registrations and BATCH messages, "
+            "and recording findings and results.")
 
 
 def resolve_lane(store, value):
