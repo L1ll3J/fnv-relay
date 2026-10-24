@@ -20,7 +20,7 @@ from . import compiler, context
 
 PROTOCOL = 'fnv-relay/2'
 BANDS = ['<=255', '256-511', '512-1K', '1K-4K', '4K+']
-NEXT_ACTION = {'poll_outbox':True, 'after_seconds':10, 'until':'new assignment or explicit paused/cooldown/error'}
+NEXT_ACTION = {'poll_outbox':True, 'after_seconds':30, 'until':'new assignment or explicit paused/cooldown/error'}
 
 def sha(data): return hashlib.sha256(data).hexdigest()
 def canonical(data): return json.dumps(data, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()
