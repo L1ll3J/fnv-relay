@@ -345,7 +345,7 @@ def serve(store, once=False, order=None):
         code = 0
         with shutdown_signals(event):
             try:
-                print("Relay running. Leave this terminal open. You can now send the starter to ChatGPT.", flush=True)
+                print("Relay running. Leave this terminal open. Open a NEW ChatGPT chat after configuring Notion, then paste the starter into that new chat.", flush=True)
                 while not event.is_set() and not store.get("shutdown_requested"):
                     engine.poll()
                     if once or store.get("drain") and not any(row.get("lease") for row in store.lanes()):

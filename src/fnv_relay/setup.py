@@ -108,7 +108,9 @@ def wizard(store, *, ask=None, hidden=None, show=print):
     show("Wait for 'Relay running'. Leave this terminal open.")
     show("")
     if lane_for_prompt is not None:
-        show("3. Only after the relay is running, paste the text between these markers into ChatGPT:")
+        show("3. Only after the relay is running, open a NEW ChatGPT chat with Notion access.")
+        show("Use a chat created after configuring the Notion connection and permissions.")
+        show("Then paste the text between these markers into that new chat:")
         show("")
         show("----- BEGIN CHATGPT PROMPT -----")
         show(starter_prompt(lane_for_prompt))
