@@ -33,3 +33,16 @@ def test_notion_connect_command_refuses_to_rebind_existing_lanes(tmp_path):
             cli.run(args, store)
     finally:
         store.close()
+
+
+def test_status_recognizes_the_selected_oauth_credentials(tmp_path):
+    from fnv_relay.presentation import snapshot
+    store = Store(tmp_path)
+    try:
+        store.set_config({"notion_transport": "mcp"})
+        store.set_secret("notion_token", "old-api-token")
+        assert snapshot(store, "test")["credentials_configured"]["notion"] is False
+        store.set_secret("notion_oauth", {"tokens": {"access_token": "oauth-token"}})
+        assert snapshot(store, "test")["credentials_configured"]["notion"] is True
+    finally:
+        store.close()

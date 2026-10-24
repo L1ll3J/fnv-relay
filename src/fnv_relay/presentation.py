@@ -57,13 +57,16 @@ def snapshot(store, version):
             error_type = None
         rows.append({"route_token": lane["route_token"], "label": clean(lane.get("label", "Lane")), "state": clean(lane.get("state")), "paused": bool(lane.get("paused")), "auto_resume": bool(lane.get("policy", {}).get("auto_resume_unfinished", False)), "model_label": clean(lane.get("policy", {}).get("model_label", "ChatGPT Web via Notion")), "claim_id": claim, "address": clean(lease.get("address")), "size_bytes": lease.get("size"), "expires_at": lease.get("expires"), "best_diff": best, "checks": store.get("checks:" + claim) or 0 if claim else 0, "error_type": error_type, "continuation": bool(lane.get("resume")), "cooldown_until": (lane.get("resume") or {}).get("not_before"), "has_active_lease": bool(lease), "landing": lane.get("landing")})
     secrets = store.secrets()
+    oauth = secrets.get("notion_oauth") or {}
+    oauth_tokens = oauth.get("tokens") or {}
+    notion_configured = bool(oauth_tokens.get("access_token")) if store.config().get("notion_transport") == "mcp" else bool(secrets.get("notion_token"))
     worker = dict(store.get("worker") or {})
     try:
         with store.lock("serve"):
             worker["running"] = False
     except AlreadyRunning:
         worker["running"] = bool(worker.get("running"))
-    return {"schema_version": 1, "version": version, "drain": bool(store.get("drain")), "shutdown_requested": bool(store.get("shutdown_requested")), "worker": worker, "credentials_configured": {"fnv": bool(secrets.get("fnv_api_key")), "notion": bool(secrets.get("notion_token"))}, "lanes": rows, "uncertain_operations": len(store.pending_operations())}
+    return {"schema_version": 1, "version": version, "drain": bool(store.get("drain")), "shutdown_requested": bool(store.get("shutdown_requested")), "worker": worker, "credentials_configured": {"fnv": bool(secrets.get("fnv_api_key")), "notion": notion_configured}, "lanes": rows, "uncertain_operations": len(store.pending_operations())}
 
 
 def human_status(data):
