@@ -33,7 +33,7 @@ def test_setup_connects_missing_accounts_verifies_page_and_creates_first_lane(tm
         engine.create_lane.assert_called_once_with(PARENT, {"order": "largest", "auto_resume_unfinished": True, "model_label": "ChatGPT Web via Notion"}, "Lane 1")
         text = "\n".join(shown)
         assert "fnv-secret" not in text and "notion-secret" not in text
-        assert "Welcome samurai o7" in text and " start" in text and " stop" in text
+        assert "Welcome courier o7" in text and " start" in text and " stop" in text
     finally:
         store.close()
 

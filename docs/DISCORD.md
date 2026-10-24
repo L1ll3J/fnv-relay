@@ -1,6 +1,6 @@
 # Discord quick start
 
-Welcome samurai o7 — this is **fnv-relay 0.2 preview**, a local bridge for working on FNV decompilation from your own ChatGPT web account through a private Notion lane.
+Welcome courier o7 — this is **fnv-relay 0.2 preview**, a local bridge for working on FNV decompilation from your own ChatGPT web account through a private Notion lane.
 
 Your web agent writes candidates in Notion. The relay on your machine checks them with the official compiler and your own game executable, then submits only independently verified local `MATCH` results. Claims and credit stay with your FNV account. No model API key or separate Codex subscription is required by the relay; your ChatGPT plan, tool access, and usage limits still apply.
 

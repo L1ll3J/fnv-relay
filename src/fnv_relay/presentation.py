@@ -17,7 +17,7 @@ def clean(value, limit=80):
 
 def starter_prompt(lane):
     url = "https://app.notion.com/p/" + page_id(lane["landing"]).replace("-", "")
-    return ("Welcome samurai o7\n\n"
+    return ("Welcome courier o7\n\n"
             "Today we're going to be doing some decompiling work, it's hard, but it's honest work. "
             "You might find it difficult but that's okay, this is largely a game of creative trial-and-error. "
             "Persistence and clever thinking will pay dividends here.\n\n"
