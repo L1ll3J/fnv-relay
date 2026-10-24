@@ -2,6 +2,10 @@
 
 This is a 0.2 preview for Ubuntu/Linux, including Ubuntu under WSL2. Python 3.11.8+ is required. Native Windows has not been verified. Run commands from your extracted package or checkout; no public hosting URL is assumed.
 
+## First connect Notion inside ChatGPT
+
+In ChatGPT, open **Settings → Integrations → Plugins → Browse directory**, search for **Notion**, sign in or sign up, and connect it. Then open **Manage → Permission → Allow all tools**. Use the Notion account/workspace you will use for the relay. These are manual ChatGPT steps; the CLI cannot perform or authorize them for you.
+
 ## Guided account setup after bootstrap
 
 With the game/compiler/checker installed using [Ubuntu/WSL2 bootstrap](BOOTSTRAP.md), run the installed CLI from an interactive terminal:
@@ -14,7 +18,9 @@ fnv-relay start
 
 If the CLI is not on your PATH, use `~/.local/share/fnv-relay-tools/venv/bin/fnv-relay`. For a custom state directory, place `--state-dir /your/state` before each command.
 
-`setup` reuses existing credentials. If missing, it walks you through FNV's GitHub browser approval and explains how to create a Notion internal connection, enter its token privately, and share a private parent page. Notion's internal token setup is manual; this package does not pretend to provide a public Notion OAuth application. The wizard verifies the parent is readable, saves it for future lanes, and offers to create your first lane and print its ChatGPT starter prompt. Connect your Notion account separately in ChatGPT before using that starter. No model API key is needed. Tool installation and the official image/compiler checks remain separate prerequisites.
+`setup` reuses existing credentials. A fresh setup walks you through FNV's GitHub approval and Notion browser authorization, where you choose your own account and workspace. The CLI uses Notion's hosted MCP service; you do not need to create a developer integration for this default flow. With browser authorization and no saved parent, press Enter at the parent-page prompt to create a private **FNV Relay** page in the chosen workspace. You can instead supply an existing private page URL; a previously saved parent can be reused. The wizard verifies that parent and offers to create a first lane and print its ChatGPT starter prompt. The wizard asks you to acknowledge the manual ChatGPT connection before CLI Notion OAuth. That saved acknowledgement records your answer, not a successful capability test. No model API key is needed. Tool installation and the official image/compiler checks remain separate prerequisites.
+
+An existing internal-token setup stays on that transport. Before any lanes have been created, `fnv-relay auth notion connect` can switch it to browser authorization. Once a state has lanes, the CLI refuses to reconnect credentials or silently rebind those lanes: keep their existing transport, or initialize a separate fresh state for the new account/transport. For a newcomer trial with a different Free ChatGPT/Notion account, use a fresh local state and choose that user's own Notion workspace; borrowing old private relay pages is unnecessary.
 
 The detailed manual steps below remain available if you prefer individual commands.
 
@@ -68,22 +74,40 @@ The configured Python must have the official checker's dependencies installed; t
 
 Compilation also needs Wine and the relay's Linux isolation prerequisites, including user namespaces (`unshare`) and Landlock support. A WSL2 installation is not automatically proof these are enabled. Run `doctor` below and resolve failed checks before serving lanes. Its namespace, Landlock, file, and authentication checks are preliminary: it does not compile a smoke candidate, verify the game image, or prove the compiler version. Use the official checker for those checks. Initialize only a new dedicated Wine prefix with `fnv-relay doctor --prepare-wine`; this explicit option runs Wine initialization and writes to that prefix. Do not bypass isolation to make a failed health check disappear.
 
-## 3. Connect a private Notion parent
+## 3. Connect Notion in your browser
 
-The local relay uses a **Notion internal connection API token**. This is separate from the Notion connection you authorize in ChatGPT; Codex/ChatGPT OAuth credentials are not a replacement.
+The normal setup wizard handles this for you. To connect, or switch a token-based state that has no lanes yet:
 
-1. As a workspace owner, create an internal connection in the [Notion developer portal](https://www.notion.so/profile/integrations). Enable read, insert, and update content capabilities needed for the lane pages.
-2. Create a private parent page in that workspace. In its `•••` menu, choose **Add connections** and select your internal connection. Grant access to this parent rather than unrelated workspace pages.
-3. Retrieve the connection token from its Configuration tab, then enter it at the hidden prompt:
+```sh
+fnv-relay auth notion connect
+fnv-relay setup
+```
+
+Keep the terminal open while your browser opens Notion. Sign in to the intended account, select the intended workspace, review the requested access, and approve. The CLI receives the result through a temporary local loopback callback and stores its credentials in your private state. It connects directly to [Notion's hosted MCP service](https://developers.notion.com/guides/mcp/build-mcp-client), rather than requiring your own public OAuth application.
+
+Notion MCP acts with the signed-in user’s Notion permissions; its authorization is broader than sharing a single page with an internal connection. Review the workspace and consent screen before approving. [Notion permissions guidance](https://www.notion.com/help/notion-mcp)
+
+If the browser does not open automatically, copy the displayed authorization URL into your own browser. On WSL2, that browser must be able to reach the CLI's localhost callback. Leave the CLI running until it confirms completion. If authorization times out or is declined, run `auth notion connect` again. Do not paste credentials or callback URLs into chat, page content, or shell arguments.
+
+The CLI's authorization and ChatGPT's Notion connection are **separate**. Complete the manual ChatGPT connection above first, then authorize the CLI against the same intended Notion workspace. Confirm that the selected conversation can read, write, and read back a harmless marker on the relay pages before claiming work; acknowledging the setup question does not prove this. See [connection checks](SUBSCRIPTIONS.md). Availability depends on the actual account and selected tools; a Free or Pro label alone does not prove access.
+
+### Advanced fallback: internal connection token
+
+Use this only if you prefer the REST/token transport or browser authorization is unavailable under your workspace policy. Configure it before creating lanes, or use a fresh state; existing lanes cannot be silently moved to another credential. This fallback requires an existing private parent page URL rather than automatic workspace-root creation:
+
+1. As a workspace owner, create an internal connection in the [Notion developer portal](https://www.notion.so/profile/integrations). Enable read, insert, and update content.
+2. Create a private parent page. In its `•••` menu, choose **Add connections** and select the connection.
+3. Enter its token at the hidden local prompt, then complete setup with that parent URL:
 
 ```sh
 fnv-relay auth notion login
+fnv-relay setup
 fnv-relay doctor
 ```
 
-Separately authorize your own Notion account in ChatGPT and confirm the web agent can read and edit the parent and its lane pages. Neither credential grants the other client access automatically. See [Notion authorization](https://developers.notion.com/guides/get-started/authorization).
+This token belongs to your own internal connection; ChatGPT/Codex OAuth credentials are not a substitute. See [Notion authorization](https://developers.notion.com/guides/get-started/authorization).
 
-**Check workspace capacity first.** Since September 8, 2026, applicable Notion API writes enforce Free workspace block limits. For internal connections, a Free workspace with more than one member has 1,000 lifetime blocks; deleting blocks does not recover capacity. Single-member Free workspaces and paid workspaces have unlimited blocks under that policy; guests are not members. Notion MCP has separate enforcement. A block-limit failure is not fixed by retrying. Check your actual workspace before assuming a purchase is needed. [Workspace block limits](https://developers.notion.com/reference/workspace-block-limits) and [API request limits](https://developers.notion.com/reference/request-limits) are separate policies.
+**Workspace limits still apply.** Notion's hosted MCP and REST API have separate enforcement policies. In the internal-token fallback, Free workspaces with more than one member can hit the 1,000 lifetime block limit; deleting blocks does not recover that capacity. Single-member Free workspaces have unlimited blocks under that policy. Do not infer MCP limits from REST limits or assume a paid plan is required: check the actual workspace and returned error. See [workspace block limits](https://developers.notion.com/reference/workspace-block-limits) and [request limits](https://developers.notion.com/reference/request-limits).
 
 ## 4. Start one lane
 
@@ -120,13 +144,13 @@ New CLI lanes default to `--auto-resume`; use `--no-auto-resume` to opt out. Exi
 ## Troubleshooting
 
 - **Doctor fails:** resolve the specific credential, file, Wine, image, or sandbox check. Do not start live lanes until required checks pass.
-- **Notion page unavailable:** verify both the internal connection's parent-page access and your web agent's own Notion authorization.
+- **Notion page unavailable:** confirm the CLI authorized the intended account/workspace and the ChatGPT conversation has its own Notion access. For the advanced token fallback, also verify parent-page sharing with the internal connection.
 - **Notion 403:** inspect whether it is a permission failure or workspace block limit. Repeated retries cannot repair either configuration.
 - **Notion 429 / overload:** honor the service's retry delay. API and MCP limits can differ.
 - **No claim available:** account eligibility, other open claims, project capacity, and selector constraints can all prevent allocation. Do not create extra accounts or keys to evade limits.
 - **Checker rejects the image or compiler:** follow the official checker README. Do not submit unchecked source.
 
-References checked 2026-10-24: [FNV instructions](https://fnvdecomp.com/agents.md), [Notion authorization](https://developers.notion.com/guides/get-started/authorization), [workspace block limits](https://developers.notion.com/reference/workspace-block-limits), [request limits](https://developers.notion.com/reference/request-limits).
+References checked 2026-10-24: [FNV instructions](https://fnvdecomp.com/agents.md), [Notion hosted MCP authorization](https://developers.notion.com/guides/mcp/build-mcp-client), [Notion authorization](https://developers.notion.com/guides/get-started/authorization), [workspace block limits](https://developers.notion.com/reference/workspace-block-limits), [request limits](https://developers.notion.com/reference/request-limits).
 
 ## Next assignments and model attribution
 

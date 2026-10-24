@@ -19,9 +19,10 @@ import time
 import signal
 import threading
 
-from . import __version__, authentication, compiler, preferences, presentation, setup, tools
+from . import __version__, authentication, compiler, connections, preferences, presentation, setup, tools
 from .engine import BANDS, Engine
 from .notion import Notion, NotionError, page_id
+from .notion_oauth import OAuthError
 from .project import FNV, ProjectError
 from .store import AlreadyRunning, Store, UncertainOperation
 
@@ -46,7 +47,9 @@ def parser():
     auth = commands.add_parser("auth").add_subparsers(dest="service", required=True)
     for service in ("fnv", "notion"):
         actions = auth.add_parser(service).add_subparsers(dest="auth_action", required=True)
-        actions.add_parser("login")
+        actions.add_parser("login", help="Advanced: enter an existing API credential")
+        if service == "notion":
+            actions.add_parser("connect", help="Sign in to Notion in your browser; no API token needed")
         if service == "fnv":
             actions.add_parser("connect", help="Approve with GitHub; no existing API key needed").add_argument("--label", default="fnv-relay")
     fetch = commands.add_parser("tools").add_subparsers(dest="tools_action", required=True).add_parser("fetch", help="Download official checker and shared files into a new directory")
@@ -91,7 +94,7 @@ def output(value):
 
 def clients(store):
     secrets = store.secrets()
-    return FNV(secrets.get("fnv_api_key", "")), Notion(secrets.get("notion_token", ""))
+    return FNV(secrets.get("fnv_api_key", "")), connections.notion_client(store, rest_factory=Notion)
 
 
 def policy(args):
@@ -148,6 +151,11 @@ def login(store, service):
         Notion(value).whoami()
         name = "notion_token"
     store.set_secret(name, value)
+    if service == "notion":
+        with store.lock("config"):
+            config = store.config()
+            config["notion_transport"] = "api"
+            store.set_config(config)
     print("Credential validated and stored privately.")
 
 
@@ -190,12 +198,18 @@ def doctor(store, prepare=False):
         ("notion_auth", "notion_token", Notion, lambda client: client.whoami()),
     ):
         checks[label] = False
-        if secrets.get(secret):
+        if secrets.get(secret) and not (label == "notion_auth" and store.config().get("notion_transport") == "mcp"):
             try:
                 operation(factory(secrets[secret]))
                 checks[label] = True
             except Exception:
                 pass
+    if store.config().get("notion_transport") == "mcp":
+        try:
+            connections.notion_client(store).whoami()
+            checks["notion_auth"] = True
+        except Exception:
+            checks["notion_auth"] = False
     output({"checks": checks, "ok": all(checks.values()), "compile_smoke_performed": False})
     return 0 if all(checks.values()) else 1
 
@@ -381,10 +395,16 @@ def run(args, store):
         configure(store, args)
     elif args.command == "auth":
         with store.lock("serve"):
-            if args.service == "fnv" and any(row.get("lease") for row in store.lanes()):
-                raise ValueError("Resolve active claims before replacing owner credentials")
+            if any(row.get("lease") for row in store.lanes()):
+                raise ValueError("Resolve active claims before replacing service credentials")
+            if args.service == "notion" and store.lanes():
+                raise ValueError("Use a fresh state directory to change Notion authorization when lanes already exist")
             if args.service == "fnv" and args.auth_action == "connect":
                 authentication.connect(store, args.label)
+            elif args.service == "notion" and args.auth_action == "connect":
+                from . import notion_oauth
+                setup.chatgpt_connection_step(store)
+                notion_oauth.connect(store)
             else:
                 login(store, args.service)
     elif args.command == "tools":
@@ -437,6 +457,8 @@ def main(argv=None):
     try:
         store = Store(args.state_dir)
         return run(args, store)
+    except OAuthError as exc:
+        print(str(exc), file=sys.stderr)
     except authentication.ConnectionError as exc:
         print(str(exc), file=sys.stderr)
     except AlreadyRunning:
@@ -448,7 +470,10 @@ def main(argv=None):
         if isinstance(exc, ProjectError) and exc.status == 401:
             print("FNV authentication failed. Run fnv-relay auth fnv connect, or auth fnv login with a current key.", file=sys.stderr)
         elif isinstance(exc, NotionError) and exc.status == 403:
-            print("Notion access was refused. Share the parent with your internal connection and check workspace block limits.", file=sys.stderr)
+            if store.config().get("notion_transport") == "mcp":
+                print("Notion access was refused. Check the authorized workspace, page permissions and workspace limits.", file=sys.stderr)
+            else:
+                print("Notion access was refused. Share the parent with your internal connection and check workspace block limits.", file=sys.stderr)
         else:
             print("Remote service request failed" + (f" (HTTP {exc.status})" if exc.status else "") + "; inspect authentication, permissions and service status.", file=sys.stderr)
     except ValueError:

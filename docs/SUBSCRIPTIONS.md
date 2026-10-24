@@ -16,7 +16,7 @@ Ordinary Chat is the mode used in our existing web relay setup. It still has its
 
 ## Test an account before claiming work
 
-1. In ChatGPT, install/connect Notion if the account offers it. Authorize a private test page belonging to you.
+1. Manually open ChatGPT **Settings → Integrations → Plugins → Browse directory**, search **Notion**, sign in/sign up and connect it. Then choose **Manage → Permission → Allow all tools**. The CLI cannot do this for you. Use a private test page in that Notion workspace.
 2. In the conversation mode you intend to use, ask ChatGPT to read that page, append a harmless unique test marker, and read the marker back using its Notion tools.
 3. Open the page yourself and confirm that the marker really exists. A message in the chat saying it wrote something is not the test result.
 4. If both reading and writing work, proceed with the setup wizard and one small lane. If only search/read tools are available, the unattended candidate/result workflow cannot work on that account yet.
@@ -25,7 +25,7 @@ This capability check needs no FNV claim, game data or model API key. It consume
 
 ## Different ChatGPT and Notion accounts
 
-The controller and web conversation need access to the same private lane pages; their Notion logins need not be identical. You can first try inviting the web account’s Notion user as an editing guest to a dedicated, empty test lane. Test reading, writing and reading back a marker through the actual connector before claiming a function. Guest-page visibility through the connector is not yet validated. Do not share the entire project workspace or connection tokens. If shared guest pages are unavailable through that connector, use a separately configured relay in the web account’s own Notion workspace.
+For a from-scratch trial on a different Free account, first complete that manual Notion plugin connection inside the Free ChatGPT account. Then use a fresh local state, run `fnv-relay setup`, and choose the same user’s Notion account/workspace in the CLI browser flow. The wizard’s saved acknowledgement is not proof of access; run the harmless read/write/readback check before claiming anything. The CLI browser grant does not authorize ChatGPT automatically. There is no need to share another operator’s private project pages or tokens. Guest access is an optional separate experiment and is not validated through every connector.
 
 ## Attribution
 

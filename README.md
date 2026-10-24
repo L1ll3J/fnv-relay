@@ -10,13 +10,15 @@ You need Python 3.11.8+, Wine, a supported Linux sandbox environment, a legitima
 
 ## Start here
 
+First connect Notion inside the ChatGPT account you will use: **Settings → Integrations → Plugins → Browse directory → search Notion → sign in/sign up → connect → Manage → Permission → Allow all tools**. Complete this manually before CLI browser authorization.
+
 On Ubuntu 24.04 x86_64 (including WSL2), the [bootstrap script](docs/BOOTSTRAP.md) installs Wine, extracts Microsoft's original compiler, and sets up the relay. Supply your own game:
 
 ```sh
 bash scripts/bootstrap-ubuntu.sh --game '/path/to/FalloutNV.exe'
 ```
 
-You approve FNV's browser login and authorize Notion separately. For manual installation:
+You approve FNV and Notion in your browser. The CLI stores its own credentials locally; its Notion browser grant is separate from the ChatGPT connection you completed first. No developer-portal setup or model API key is needed for the default flow. For manual installation:
 
 From an extracted release or local checkout:
 
@@ -26,7 +28,7 @@ python3 -m venv .venv
 .venv/bin/fnv-relay --help
 ```
 
-After [Ubuntu/WSL2 bootstrap](docs/BOOTSTRAP.md), run `fnv-relay setup` to connect your accounts, verify a private Notion parent, and optionally create your first lane. Then run `fnv-relay start`.
+After [Ubuntu/WSL2 bootstrap](docs/BOOTSTRAP.md), run `fnv-relay setup` to connect your accounts in the browser, choose your Notion workspace, create a private parent page, and optionally create your first lane. Then run `fnv-relay start`.
 
 Common commands:
 
@@ -43,13 +45,13 @@ Setup asks for largest first, smallest first, or a random eligible size band and
 
 `start` runs in the foreground. Ctrl+C, SIGTERM and terminal hangup request release and cleanup; allow the current compiler process to finish. An unresolved submission or release is reported as pending, with its reservation retained. Restarting continues an unpaused lane's saved function; manually paused lanes require `lane resume`.
 
-Follow [Setup](docs/SETUP.md) for browser approval with `auth fnv connect`, official downloads with `tools fetch`, the game/toolchain paths, Notion authentication, health checks, and your first lane. [Discord quick start](docs/DISCORD.md) is a short introduction you can share. [Validation and preview boundaries](docs/VALIDATION.md) distinguishes tested behavior from remaining limitations.
+Follow [Setup](docs/SETUP.md) for browser approval with `auth fnv connect`, official downloads with `tools fetch`, the game/toolchain paths, Notion browser authorization with `auth notion connect`, health checks, and your first lane. [Discord quick start](docs/DISCORD.md) is a short introduction you can share. [Validation and preview boundaries](docs/VALIDATION.md) distinguishes tested behavior from remaining limitations.
 
 See [ChatGPT plans and connection checks](docs/SUBSCRIPTIONS.md) before choosing a subscription. Pro is not a relay requirement; actual Notion read/write access is.
 
 ## Data and ownership
 
-Claims and project credit belong to your FNV account. Credentials and local work stay in your local state directory; lane context is written to the Notion pages you authorize. Keep that parent page private in your own workspace. Notion is an external service, so content written there is subject to its policies.
+Claims and project credit belong to your FNV account. Credentials and local work stay in your local state directory; lane context is written to relay pages in your selected Notion workspace. Keep that parent page private in your own workspace. Notion is an external service, so content written there is subject to its policies.
 
 Do not publish state directories, private page links, tokens, context packs, candidate source, game files, compiler binaries, or debug traces as part of this package. Follow the [FNV contributor terms](https://fnvdecomp.com/legal.html) and official agent rules. This package's MIT license covers its own code only; it does not license the game, Microsoft compiler, checker, or project context.
 

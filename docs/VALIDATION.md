@@ -10,10 +10,11 @@ Validated on Ubuntu/Linux under WSL2 on 2026-10-24:
 - Bootstrap extraction from a retained Microsoft ISO: all 2,705 extracted files matched the working compiler tree. System apt installation and a completely fresh end-to-end bootstrap were not run.
 - Original target bytes and checker-rendered disassembly exported successfully from the same retained pack.
 
-The new standalone Notion internal-token client has mocked transport tests. It has not been tested through a live newcomer account from initial login to a real server-verified contribution. Existing live private Pro lanes use a separate transport; their operation does not establish that this new package's complete live loop has passed. Treat this as a preview and start with one small lane.
+The standalone Notion browser-OAuth transport and advanced internal-token fallback remain preview paths. Offline transport tests do not establish a live newcomer run from browser authorization to a real server-verified contribution. In particular, do not treat the new browser flow as fully live validated until its actual account/workspace authorization and page read/write checks have passed. Existing live private Pro lanes use a separate transport; their operation does not establish that this new package's complete live loop has passed. Treat this as a preview and start with one small lane.
 
 Current boundaries:
 
+- ChatGPT Notion authorization is a manual prerequisite: Settings → Integrations → Plugins → Browse directory → Notion → connect, then Manage → Permission → Allow all tools. The setup acknowledgement is not an access test; confirm actual read/write/readback before claiming. CLI OAuth is a separate grant.
 - Linux/WSL2 only; no native Windows support claim.
 - Compiler checks run sequentially. Each claim has an independent ordinary-code expiry guardian.
 - Selection orders available size bands; it does not have a global ranking of every open function. A size-filter miss releases the claim and pauses admissions for that unchanged lane policy rather than repeatedly claiming unsuitable functions.

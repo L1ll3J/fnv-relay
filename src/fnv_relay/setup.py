@@ -4,11 +4,28 @@ from __future__ import annotations
 import getpass
 import sys
 
-from . import authentication, preferences
+from . import authentication, connections, preferences
 from .engine import Engine
 from .notion import Notion, page_id
 from .presentation import starter_prompt
 from .project import FNV
+
+
+
+def chatgpt_connection_step(store, *, ask=None, show=print):
+    """Record an operator acknowledgement, not a verified ChatGPT capability."""
+    if store.get("chatgpt_notion_setup_ack"):
+        return
+    if not sys.stdin.isatty():
+        raise ValueError("ChatGPT connection setup needs an interactive terminal")
+    ask = ask or input
+    show("First, connect Notion manually in the ChatGPT account that will solve functions:")
+    show("Account > Settings > Integrations > Plugins > Browse directory > search Notion.")
+    show("Connect and sign in or create your Notion account. Then open Manage > Permission > Allow all tools.")
+    show("Next, this CLI will ask you to authorize the same Notion account/workspace in your browser.")
+    ask("Press Enter when the ChatGPT Notion connection and tool permissions are ready: ")
+    store.set("chatgpt_notion_setup_ack", True)
+    show("Setup acknowledged. We will still verify actual read/write access before claiming work.")
 
 
 def wizard(store, *, ask=None, hidden=None, show=print):
@@ -28,21 +45,32 @@ def wizard(store, *, ask=None, hidden=None, show=print):
         project = FNV(store.secrets().get("fnv_api_key", ""))
         project.call("status", {})
         secrets = store.secrets()
-        if not secrets.get("notion_token"):
-            show("Notion needs a private internal connection token, not ChatGPT/Codex OAuth.")
-            show("As a workspace owner, open https://www.notion.so/profile/integrations and create an internal connection.")
-            show("Enable read, insert and update content. Copy its token from Configuration.")
-            show("On your private parent page, use the ... menu > Add connections to share it with this connection.")
-            show("Keep the page private. Separately connect your Notion account in ChatGPT.")
-            token = hidden("Notion internal connection token (hidden): ").strip()
-            Notion(token).whoami()
-            store.set_secret("notion_token", token)
-        notion = Notion(store.secrets().get("notion_token", ""))
-        notion.whoami()
+        chatgpt_connection_step(store, ask=ask, show=show)
+        if not connections.configured(store):
+            from . import notion_oauth
+            show("Connect Notion in your browser. Choose the workspace for this relay.")
+            notion_oauth.connect(store, show=show)
+        notion = connections.notion_client(store, rest_factory=Notion)
+        identity = notion.whoami()
         config = store.config()
         previous = config.get("notion_parent_page")
-        entered = ask("Private Notion parent page URL or UUID" + (" [Enter keeps saved page]" if previous else "") + ": ").strip()
-        parent = page_id(entered or previous or "")
+        browser_connection = config.get("notion_transport") == "mcp"
+        if browser_connection and not previous:
+            entered = ask("Parent page URL [Enter creates a private FNV Relay page]: ").strip()
+            if entered:
+                parent = page_id(entered)
+            else:
+                workspace = identity.get("workspace", {}).get("id")
+                if not isinstance(workspace, str) or not workspace:
+                    raise ValueError("Connected workspace identity is required")
+                parent = store.operation("setup-parent:" + workspace, {"workspace": workspace, "title": "FNV Relay"}, lambda: notion.create_workspace_page("FNV Relay"))
+                parent = page_id(parent)
+                show("Created private relay page: https://www.notion.so/" + parent.replace("-", ""))
+        else:
+            if not browser_connection:
+                show("Use a normal Notion page, not developer settings. Share it through ... > Add connections first.")
+            entered = ask("Private Notion parent page URL or UUID" + (" [Enter keeps saved page]" if previous else "") + ": ").strip()
+            parent = page_id(entered or previous or "")
         notion.page(parent)
         config["notion_parent_page"] = parent
         with store.lock("config"):
