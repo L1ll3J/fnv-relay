@@ -47,6 +47,8 @@ class FakeProject:
             return {"limits": {"claims": 4, "subsPerDay": 60, "pending": 25}, "open_claims": deepcopy(self.open), "submissions_today": 0, "awaiting_verification": 0}
         if tool == "list_bands":
             return {"bands": [{"band": "<=255", "allowed": True, "open": 10}]}
+        if tool == "function_info":
+            return {"address":args["address"], "state":"open"}
         if tool == "claim":
             self.claims += 1
             claim = {"claim_id": "claim-" + str(self.claims), "address": "0x401000", "size": 32, "expires_at": datetime.fromtimestamp(self.now + 7200, timezone.utc).isoformat(), "this_key": True}

@@ -386,6 +386,8 @@ def serve(store, once=False, order=None):
                             error = store.get('last_error:'+row['route_token']) or {}
                             if error.get('type') == 'OAuthError' or error.get('type') == 'NotionError' and error.get('http_status') == 401:
                                 print("Notion sign-in needs attention. Stop the relay, then run auth notion connect with this state directory and existing workspace.", flush=True)
+                            if row.get('blocked_reason') == 'function_paused':
+                                print("FNV paused this function for problem-report review. Unfinished work is saved; reconnecting will not unblock it. Resume this lane after the project reopens the function.", flush=True)
                             if row.get('blocked_reason') == 'fnv_access_denied':
                                 print("FNV refused a claim (401/403). Unfinished work is saved. Check FNV access, then run lane resume " + row['route_token'] + ".", flush=True)
                         previous_status = current_status

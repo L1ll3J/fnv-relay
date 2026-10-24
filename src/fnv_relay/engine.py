@@ -218,6 +218,15 @@ class Engine:
                 except (ValueError, TypeError): deadline = epoch(paused_until)
                 if deadline > self.clock():
                     lane['admission_not_before'] = deadline; self.store.put_lane(lane); return
+            if resume:
+                info = self.project.call('function_info', {'address':resume['address']})
+                if not isinstance(info,dict) or info.get('address') != resume['address'] or not isinstance(info.get('state'),str):
+                    raise ValueError('Continuation eligibility was not confirmed')
+                if info['state'].split(' ',1)[0].lower() == 'paused':
+                    lane.update(paused=True, blocked_reason='function_paused')
+                    self.store.put_lane(lane)
+                    self.store.event('continuation_function_paused', {'route_token':lane['route_token'], 'address':resume['address']})
+                    return
             args = {'address': resume['address'], 'context_mode': 'resume'} if resume else self.select(lane, status)
             if args is None or self.admission_blocked(): return
             lane['sequence'] += 1; lane['state'] = 'claim_intent'; lane['claim_owner']=self.owner; self.store.put_lane(lane)

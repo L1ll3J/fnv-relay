@@ -410,3 +410,20 @@ def test_claim_access_denial_pauses_without_uncertain_intent_or_losing_continuat
     assert current['resume']['address']=='0x401000'
     assert env.store.pending_operations()==[]
     assert env.store.operation_record('claim:'+env.route+':2')['status']=='response'
+
+
+def test_project_paused_continuation_is_saved_without_attempting_claim(env,monkeypatch):
+    automatic(env)
+    env.engine.release(lane(env),'Preserve unfinished work')
+    previous=deepcopy(lane(env)['resume'])
+    original=env.project.call
+    def call(tool,args):
+        if tool=='function_info':return {'address':args['address'],'state':'paused (problem reports under review)'}
+        return original(tool,args)
+    monkeypatch.setattr(env.project,'call',call)
+    before=env.project.claims
+    env.engine.assign(lane(env))
+    current=lane(env)
+    assert current['paused'] and current['blocked_reason']=='function_paused'
+    assert current['resume']==previous and env.project.claims==before
+    assert env.store.pending_operations()==[]
