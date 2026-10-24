@@ -183,3 +183,31 @@ def test_tokens_obtained_before_failed_identity_proof_remain_staged(tmp_path):
     assert store.secrets()==before and store.config()['notion_parent_page']=='keep-parent'
     assert store.config()['notion_transport']=='token'
     store.close()
+
+
+@pytest.mark.parametrize('failure',[None,'workspace','page'])
+def test_reconnect_verifies_existing_workspace_and_every_lane_page_before_commit(tmp_path,failure):
+    store=Store(tmp_path)
+    store.set_config({'schema':1,'paths':{},'notion_transport':'mcp','notion_workspace_id':WORKSPACE,'notion_parent_page':'keep-parent'})
+    store.set_secret(oauth.SECRET_NAME,{'tokens':{'access_token':'old-access'}})
+    lane={'route_token':'route','landing':'landing','inbox':'inbox','outbox':'outbox','data':'data'}
+    store.put_lane(lane)
+    before=store.secrets(); calls=[]
+    async def signed_in(auth,name,args,**kwargs):
+        calls.append((name,args))
+        await auth.context.storage.set_client_info(OAuthClientInformationFull(client_id='staged',redirect_uris=['http://127.0.0.1:9999/oauth/callback']))
+        await auth.context.storage.set_tokens(OAuthToken(access_token='new-access',token_type='Bearer',expires_in=3600))
+        if name=='notion-get-self':
+            return {'structuredContent':{'workspace':{'id':USER if failure=='workspace' else WORKSPACE},'user':{'id':USER}}}
+        if failure=='page': raise NotionError(status=403)
+        return {'structuredContent':{'object':'page','id':args['id']}}
+    if failure:
+        with pytest.raises(oauth.OAuthError):oauth.connect(store,_call=signed_in,show=lambda _:None,timeout=1)
+        assert store.secrets()==before
+    else:
+        oauth.connect(store,_call=signed_in,show=lambda _:None,timeout=1)
+        assert store.secrets()[oauth.SECRET_NAME]['tokens']['access_token']=='new-access'
+        assert [args['id'] for name,args in calls if name=='notion-fetch']==['landing','inbox','outbox','data']
+    assert store.config()['notion_parent_page']=='keep-parent'
+    assert store.lanes()==[lane]
+    store.close()

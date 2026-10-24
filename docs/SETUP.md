@@ -160,3 +160,13 @@ Free or lighter models may end their turn before finishing a task. To continue, 
 An accepted submission can move the lane to its next eligible function without waiting for overnight verification. The local `MATCH` and fresh independent check remain required; project limits and account-health checks still apply. The starter asks the web agent to keep checking its outbox after each task. The relay cannot force ChatGPT to stay active indefinitely or restart a completed web turn: if the web conversation stops, continue it yourself. Fresh agent activity or an explicit resume is still required for new admissions.
 
 FNV contribution credit stays with your account. New lanes default to the honest attribution `ChatGPT Web via Notion`, which describes the route without guessing a model. To record a model actually confirmed by the UI, pass `lane create --model-label 'YOUR CONFIRMED MODEL via Web'`. The setup wizard uses the route default. Subscription names or the agent's self-report do not establish model identity, and a web message cannot replace your configured attribution. Model attribution is optional project metadata; it does not change account ownership.
+
+## Restarting unfinished work
+
+`start` prints the starter again and shows each lane's current state. A running relay does not imply an active claim: the lane may be waiting for registration, reconnecting, preparing an assignment, or paused. You can retrieve the starter at any time with `fnv-relay lane prompt ROUTE`.
+
+When a lease is released, automatic continuation preserves the unfinished function and checked attempts. Restart with the same state directory. Use the newest assignment in the lane outbox; old claim identifiers expire.
+
+A definite FNV authentication/access refusal pauses the lane with its continuation intact. Check account access, then run `fnv-relay lane resume ROUTE`. An uncertain claim request is different: stop the relay, run `fnv-relay reconcile --claim ROUTE`, then `start`. Reconciliation verifies that no active claims belong to this key, keeps the original operation journal, and rearms the saved task locally. It does not send a claim request or retry a write. If any claim still belongs to the key, reconciliation refuses to proceed. Other uncertain operations require separate review.
+
+For Notion reconnection, stop the relay and run `fnv-relay auth notion connect`. Select the existing workspace. New credentials replace the old ones only after workspace identity and access to every existing lane page are verified. Keep the same state directory.

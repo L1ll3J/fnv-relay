@@ -84,7 +84,8 @@ def parser():
     stop = commands.add_parser("stop", aliases=["shutdown"], help="Release tracked claims and stop the worker safely")
     stop.add_argument("--timeout", type=float, default=15, help="Wait at most this many seconds for a running worker (0–120)")
     commands.add_parser("drain", help="Finish current claims without assigning more")
-    commands.add_parser("reconcile", help="List uncertain writes; never retry or clear them")
+    reconcile = commands.add_parser("reconcile", help="Inspect uncertain writes; optionally verify a claim is no longer active")
+    reconcile.add_argument("--claim", metavar="ROUTE", help="Verify no claims belong to this key; preserve the intent and rearm this lane locally")
     return root
 
 
@@ -310,8 +311,31 @@ def release_report(store, engine, reason):
     expired = counts.get("expired", 0)
     print(f"Shutdown: {released} released, {pending} pending, {uncertain} uncertain, {expired} already expired.")
     if pending or uncertain:
-        print("Unresolved claims remain protected by their guardian/reservation. Inspect status and reconcile; do not assume they were released.")
+        print("Unresolved operations remain recorded. An uncertain claim request does not prove an active claim. Inspect status --refresh and reconcile; tracked claims retain their guardians.")
     return 1 if pending or uncertain else 0
+
+
+def reconcile_claim(store, route):
+    with store.lock("serve"), account_lock(store.secrets().get("fnv_api_key", "")):
+        lane = presentation.resolve_lane(store, route)
+        if lane.get("lease") or lane.get("state") != "claim_intent":
+            raise ValueError("Lane does not have an unresolved claim intent")
+        op = "claim:"+lane['route_token']+":"+str(lane['sequence'])
+        record = store.operation_record(op)
+        if not record or record['status'] == 'response':
+            raise ValueError("Claim operation is not uncertain")
+        status = FNV(store.secrets().get("fnv_api_key", "")).call("status", {})
+        if not isinstance(status.get('open_claims'), list) or any(not isinstance(row,dict) or type(row.get('this_key')) is not bool for row in status['open_claims']):
+            raise ValueError("Official ownership status was not confirmed")
+        if any(row.get('this_key') for row in status['open_claims']):
+            raise UncertainOperation("This key still owns a claim; inspect official status before reconciliation")
+        receipt = {'args_hash':record['args_hash'], 'observed_at':time.time(), 'resolution':'no_active_claim_for_key', 'original_status':record['status']}
+        store.set('claim-resolution:'+op, receipt)
+        engine = Engine(store, None, None, watchdog=False)
+        engine.recover_claim_intent(lane)
+        engine.resume_lane(lane['route_token'])
+        store.event('claim_reconciled_no_active_ownership', {'route_token':lane['route_token'], 'operation':op})
+        print("No active claim belongs to this key. Original intent retained; unfinished work is ready to resume on start.")
 
 
 def serve(store, once=False, order=None):
@@ -345,9 +369,26 @@ def serve(store, once=False, order=None):
         code = 0
         with shutdown_signals(event):
             try:
-                print("Relay running. Leave this terminal open. Open a NEW ChatGPT chat after configuring Notion, then paste the starter into that new chat.", flush=True)
+                print("Relay running. Leave this terminal open. A running relay does not yet mean a claim is assigned.", flush=True)
+                for row in store.lanes():
+                    if row.get("landing"):
+                        print("\nOpen a NEW ChatGPT chat after configuring Notion. Paste this starter (also available with lane prompt " + row["route_token"] + "):")
+                        print("----- BEGIN CHATGPT PROMPT -----")
+                        print(presentation.starter_prompt(row))
+                        print("----- END CHATGPT PROMPT -----", flush=True)
+                previous_status = None
                 while not event.is_set() and not store.get("shutdown_requested"):
                     engine.poll()
+                    current_status = presentation.human_status(presentation.snapshot(store, __version__))
+                    if current_status != previous_status:
+                        print(current_status, flush=True)
+                        for row in store.lanes():
+                            error = store.get('last_error:'+row['route_token']) or {}
+                            if error.get('type') == 'OAuthError' or error.get('type') == 'NotionError' and error.get('http_status') == 401:
+                                print("Notion sign-in needs attention. Stop the relay, then run auth notion connect with this state directory and existing workspace.", flush=True)
+                            if row.get('blocked_reason') == 'fnv_access_denied':
+                                print("FNV refused a claim (401/403). Unfinished work is saved. Check FNV access, then run lane resume " + row['route_token'] + ".", flush=True)
+                        previous_status = current_status
                     if once or store.get("drain") and not any(row.get("lease") for row in store.lanes()):
                         break
                     event.wait(interval)
@@ -407,8 +448,8 @@ def run(args, store):
         with store.lock("serve"):
             if any(row.get("lease") for row in store.lanes()):
                 raise ValueError("Resolve active claims before replacing service credentials")
-            if args.service == "notion" and store.lanes():
-                raise ValueError("Use a fresh state directory to change Notion authorization when lanes already exist")
+            if args.service == "notion" and store.lanes() and (args.auth_action != "connect" or store.config().get("notion_transport") != "mcp"):
+                raise ValueError("Existing lanes require same-workspace browser reconnection")
             if args.service == "fnv" and args.auth_action == "connect":
                 authentication.connect(store, args.label)
             elif args.service == "notion" and args.auth_action == "connect":
@@ -431,7 +472,10 @@ def run(args, store):
         store.set("drain", True)
         print("Draining: current claims may finish; no new claims will be assigned.")
     elif args.command == "reconcile":
-        output({"uncertain_operations": store.pending_operations(), "action": "Review service state before any retry; this command does not mutate or retry operations."})
+        if args.claim:
+            reconcile_claim(store, args.claim)
+        else:
+            output({"uncertain_operations": store.pending_operations(), "action": "Use reconcile --claim ROUTE to verify ownership of an uncertain claim request. Other uncertain writes require review."})
     elif args.command == "logs":
         events = store.events(args.tail)
         for event in events:
@@ -474,11 +518,13 @@ def main(argv=None):
     except AlreadyRunning:
         print("Another relay command holds the worker lock.", file=sys.stderr)
     except UncertainOperation:
-        print("An uncertain external operation requires review. Run reconcile; no automatic retry was made.", file=sys.stderr)
+        print("An uncertain external operation requires review; no automatic retry was made. Run reconcile. For an uncertain claim request, stop the relay and run reconcile --claim ROUTE to verify current ownership.", file=sys.stderr)
     except (ProjectError, NotionError) as exc:
         # Codes and text returned by a service are not trusted terminal output.
         if isinstance(exc, ProjectError) and exc.status == 401:
             print("FNV authentication failed. Run fnv-relay auth fnv connect, or auth fnv login with a current key.", file=sys.stderr)
+        elif isinstance(exc, NotionError) and exc.status == 401:
+            print("Notion sign-in expired. Stop the relay, then run auth notion connect using the same state directory and workspace.", file=sys.stderr)
         elif isinstance(exc, NotionError) and exc.status == 403:
             if store.config().get("notion_transport") == "mcp":
                 print("Notion access was refused. Check the authorized workspace, page permissions and workspace limits.", file=sys.stderr)

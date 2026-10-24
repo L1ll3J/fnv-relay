@@ -321,3 +321,44 @@ def test_config_preserves_virtualenv_python_symlink(tmp_path):
         assert store.config()["paths"]["python"] == str(python)
     finally:
         store.close()
+
+
+@pytest.mark.parametrize('owned',[False,True])
+def test_reconcile_claim_preserves_original_intent_and_requires_no_owned_claims(tmp_path,monkeypatch,owned):
+    store=Store(tmp_path)
+    route='test-route'
+    store.put_lane({'route_token':route,'label':'test','sequence':1,'state':'claim_intent','resume':{'address':'0x401000'},'policy':{}})
+    with pytest.raises(RuntimeError):
+        store.operation('claim:'+route+':1',{'address':'0x401000'},Mock(side_effect=RuntimeError()))
+    before=store.operation_record('claim:'+route+':1')
+    project=Mock(); project.call.return_value={'open_claims':[{'this_key':True}] if owned else []}
+    monkeypatch.setattr(cli,'FNV',Mock(return_value=project))
+    monkeypatch.setattr(cli,'account_lock',lambda key:nullcontext())
+    if owned:
+        with pytest.raises(cli.UncertainOperation): cli.reconcile_claim(store,route)
+        assert len(store.pending_operations())==1
+        assert store.lane(route)['state']=='claim_intent'
+    else:
+        cli.reconcile_claim(store,route)
+        assert store.pending_operations()==[]
+        assert store.lane(route)['state']=='resume_pending'
+        assert store.lane(route)['resume']['address']=='0x401000'
+    assert store.operation_record('claim:'+route+':1')==before
+    project.call.assert_called_once_with('status',{})
+    store.close()
+
+
+def test_start_prints_existing_starter_and_lane_state(tmp_path,monkeypatch,capsys):
+    store=Store(tmp_path)
+    store.put_lane({'route_token':'test-route','label':'test','state':'waiting_hello','landing':'0123456789abcdef0123456789abcdef','policy':{}})
+    store.close()
+    monkeypatch.setattr(cli,'clients',lambda store:(Mock(),Mock()))
+    monkeypatch.setattr(cli,'host_checks',lambda paths:{'ready':True})
+    monkeypatch.setattr(cli,'account_lock',lambda key:nullcontext())
+    engine=Mock();engine.release_all.return_value={'counts':{'released':0,'pending':0,'uncertain':0}}
+    monkeypatch.setattr(cli,'Engine',Mock(return_value=engine))
+    assert call(tmp_path,'start','--once')==0
+    out=capsys.readouterr().out
+    assert 'BEGIN CHATGPT PROMPT' in out and 'Welcome courier o7' in out
+    assert 'awaiting web agent' in out
+    assert 'does not yet mean a claim is assigned' in out

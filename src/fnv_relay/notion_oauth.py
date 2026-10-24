@@ -214,7 +214,8 @@ class SDKCaller:
 
 def connect(store, *, show=print, open_browser=webbrowser.open, timeout=300, _call=None):
     """Explicit browser sign-in; persist/switch settings only after read-only proof."""
-    if store.lanes(): raise OAuthError('Use a new state directory to connect a different Notion workspace while lanes exist.')
+    lanes = store.lanes()
+    if any(row.get('lease') for row in lanes): raise OAuthError('Stop the relay and release active claims before reconnecting Notion.')
     from .notion_mcp import unpack
     with store.lock('notion-oauth-session'):
         storage = TokenStorage(store, staged=True)
@@ -230,6 +231,17 @@ def connect(store, *, show=print, open_browser=webbrowser.open, timeout=300, _ca
                     raise OAuthError('Notion did not complete sign-in. No connection settings changed.')
                 workspace['id']=page_id(workspace['id']); user['id']=page_id(user['id'])
                 storage.data['workspace_id'] = workspace['id']
+                if lanes:
+                    if store.config().get('notion_workspace_id') != workspace['id']:
+                        raise OAuthError('Choose the existing relay workspace. Connection settings were not changed.')
+                    for lane in lanes:
+                        for role in ('landing', 'inbox', 'outbox', 'data'):
+                            page = lane.get(role)
+                            if not page: raise OAuthError('Existing lane is incomplete. Connection settings were not changed.')
+                            fetched = unpack(asyncio.run((_call or sdk_call)(auth, 'notion-fetch', {'id':page}, timeout=timeout+30)))
+                            if fetched.get('object') != 'page' and not fetched.get('id') and not fetched.get('text'):
+                                raise OAuthError('Existing relay page access was not confirmed. Connection settings were not changed.')
+
         except OAuthError: raise
         except Exception:
             raise OAuthError('Notion sign-in failed. No connection settings changed; run auth notion connect again.') from None

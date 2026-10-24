@@ -144,7 +144,7 @@ class Store:
         return record
 
     def pending_operations(self):
-        return [{"key": row[0], "args_hash": row[1], "status": row[2], "created": row[3], "updated": row[4]} for row in self.db.execute("SELECT key,args_hash,status,created,updated FROM operations WHERE status!='response' ORDER BY created")]
+        return [{"key": row[0], "args_hash": row[1], "status": row[2], "created": row[3], "updated": row[4]} for row in self.db.execute("SELECT key,args_hash,status,created,updated FROM operations WHERE status!='response' ORDER BY created") if not (row[0].startswith("claim:") and (self.get("claim-resolution:"+row[0]) or {}).get("args_hash") == row[1])]
 
     def operation(self, key, args, fn):
         args_hash = hashlib.sha256(_json(args).encode("utf-8")).hexdigest()

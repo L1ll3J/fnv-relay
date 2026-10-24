@@ -392,3 +392,21 @@ def test_invalid_task_order_still_rejected_without_allocating(env):
     with pytest.raises(ValueError,match='Unsupported selection order'):
         env.engine.select(current,env.project.call('status',{}))
     assert env.project.claims==0
+
+
+@pytest.mark.parametrize('status', [401,403])
+def test_claim_access_denial_pauses_without_uncertain_intent_or_losing_continuation(env,monkeypatch,status):
+    automatic(env)
+    env.engine.release(lane(env),'Preserve unfinished task')
+    original=env.project.call
+    def denied(tool,args):
+        if tool=='claim': raise ProjectError(status,None,False,'access_denied')
+        return original(tool,args)
+    monkeypatch.setattr(env.project,'call',denied)
+    env.engine.assign(lane(env))
+    current=lane(env)
+    assert current['state']=='resume_pending' and current['paused']
+    assert current['blocked_reason']=='fnv_access_denied'
+    assert current['resume']['address']=='0x401000'
+    assert env.store.pending_operations()==[]
+    assert env.store.operation_record('claim:'+env.route+':2')['status']=='response'

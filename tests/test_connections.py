@@ -29,7 +29,7 @@ def test_notion_connect_command_refuses_to_rebind_existing_lanes(tmp_path):
     store.put_lane({"route_token": "route", "state": "idle"})
     try:
         args = cli.parser().parse_args(["auth", "notion", "connect"])
-        with pytest.raises(ValueError, match="fresh state"):
+        with pytest.raises(ValueError, match="same-workspace browser reconnection"):
             cli.run(args, store)
     finally:
         store.close()

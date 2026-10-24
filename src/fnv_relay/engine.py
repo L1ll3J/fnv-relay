@@ -104,6 +104,7 @@ class Engine:
             lane = self.store.lane(route)
             if lane is None: raise ValueError('Unknown lane')
             lane.update(paused=False, ready=True, explicit_resume=True)
+            lane.pop('blocked_reason', None)
             self.store.put_lane(lane)
             return lane
 
@@ -176,6 +177,8 @@ class Engine:
         if resume:
             resume.update(not_before=deadline,retries=resume.get('retries',0)+1); lane['resume']=resume
         if denial['status'] in (429,503): self.store.set('project_not_before',max(deadline,self.store.get('project_not_before') or 0))
+        if denial['status'] in (401,403):
+            lane.update(paused=True, blocked_reason='fnv_access_denied')
         self.store.put_lane(lane)
         self.store.event('claim_denied',{'route_token':lane['route_token'],'status':denial['status'],'not_before':deadline})
 
@@ -184,6 +187,11 @@ class Engine:
             self.refresh(lane)
             if lane['state']!='claim_intent': return None
             record=self.store.operation_record('claim:'+lane['route_token']+':'+str(lane['sequence']))
+            op='claim:'+lane['route_token']+':'+str(lane['sequence'])
+            resolution=self.store.get('claim-resolution:'+op)
+            if record and resolution and resolution.get('args_hash')==record['args_hash']:
+                lane['state']='resume_pending' if lane.get('resume') else 'idle'
+                self.store.put_lane(lane); return 'no_active_claim_confirmed'
             if not record or record['status']!='response': return None
             response=record['result']
             if response.get('_relay_cancelled'):
@@ -220,7 +228,7 @@ class Engine:
                 try:
                     return self.project.call('claim', args)
                 except ProjectError as error:
-                    if not error.uncertain and error.status in (404, 409, 429, 503):
+                    if not error.uncertain and error.status in (400, 401, 403, 404, 409, 422, 429, 503):
                         return {'_relay_definite_denial': {'status': error.status, 'retry_after': error.retry_after, 'code': error.code, 'observed_at':self.clock()}}
                     raise
             claim = self.store.operation(op, args, claim_once)
@@ -666,4 +674,4 @@ class Engine:
                 if lane['state'] in ('idle','resume_pending') and not self.stop_requested(): self.assign(lane)
             except Exception as error:
                 self.store.event('lane_error',{'route_token':lane['route_token'],'type':type(error).__name__,'message':str(error)[:400]})
-                self.store.set('last_error:'+lane['route_token'],{'type':type(error).__name__,'message':str(error)[:400]})
+                self.store.set('last_error:'+lane['route_token'],{'type':type(error).__name__,'http_status':getattr(error,'status',None),'message':str(error)[:400]})
