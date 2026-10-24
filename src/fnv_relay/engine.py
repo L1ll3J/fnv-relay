@@ -467,10 +467,21 @@ class Engine:
             self.store.set('batch-result:'+publication, records[0]['payload'])
             self.store.set('reconciled:'+publication, True)
             return
-        if not isinstance(pointers, list) or not 1 <= len(pointers) <= 8: raise ValueError('Batch must contain1–8 candidates')
-        prepared = [self.candidate(lane, pointer) for pointer in pointers]
-        if len({cid for cid, _ in prepared}) != len(prepared): raise ValueError('Duplicate candidate identifier within batch')
-        if len({sha(raw) for _, raw in prepared}) != len(prepared): raise ValueError('Duplicate source within batch')
+        try:
+            if not isinstance(pointers, list) or not 1 <= len(pointers) <= 8: raise ValueError('Batch must contain1–8 candidates')
+            prepared = [self.candidate(lane, pointer) for pointer in pointers]
+            if len({cid for cid, _ in prepared}) != len(prepared): raise ValueError('Duplicate candidate identifier within batch')
+            if len({sha(raw) for _, raw in prepared}) != len(prepared): raise ValueError('Duplicate source within batch')
+        except (ValueError, KeyError, TypeError) as error:
+            rejection = {'status':'BATCH_REJECTED', 'batch_message_id':mid,
+                         'reason_code':'source_integrity_mismatch' if str(error) == 'Source hash/size differs' else 'invalid_candidate_batch',
+                         'checks_performed':0, 'requires_new_batch_message_id':True,
+                         'scope':{key:lane['lease'][key] for key in ('claim_id','pack_sha256')}}
+            self.store.set('batch-result:'+publication, rejection)
+            self.publish(lane, publication, rejection)
+            if (self.store.get('last_error:'+lane['route_token']) or {}).get('message') == str(error):
+                self.store.set('last_error:'+lane['route_token'], None)
+            return
         lease = dict(lane['lease']); directory = Path(lease['directory']); (directory/'sources').mkdir(exist_ok=True)
         results = []
         for cid, raw in prepared:

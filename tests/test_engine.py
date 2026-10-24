@@ -348,3 +348,43 @@ def test_changed_batch_input_still_rejected_after_saved_result(env):
     with pytest.raises(ValueError, match="already bound"):
         env.engine.batch(lane(env), changed)
     assert len(env.checker.calls) == 1
+
+
+@pytest.mark.parametrize('bad_metadata', [{'source_bytes': 999}, {'source_sha256': '0' * 64}])
+def test_invalid_source_batch_reports_rejection_and_allows_next_batch(env, bad_metadata):
+    assign(env)
+    env.store.set('last_error:'+env.route, {'type':'ValueError', 'message':'Source hash/size differs'})
+    post_batch(env, [candidate(env, 'invalid', 'int target(){return 41;}', file_override=bad_metadata)], 'invalid-batch')
+    post_batch(env, [candidate(env, 'valid', 'int target(){return 40;}')], 'valid-batch')
+    env.engine.poll()
+    rejected = [r['payload'] for r in env.notion.messages(lane(env)['outbox']) if r.get('payload', {}).get('status') == 'BATCH_REJECTED']
+    assert len(rejected) == 1
+    assert rejected[0]['reason_code'] == 'source_integrity_mismatch'
+    assert rejected[0]['checks_performed'] == 0
+    assert rejected[0]['requires_new_batch_message_id'] is True
+    assert [x['source'] for x in env.checker.calls] == [b'int target(){return 40;}']
+    assert env.store.get('message:'+env.route+':invalid-batch')
+    assert env.store.get('message:'+env.route+':valid-batch')
+    env.engine.poll()
+    assert len(env.checker.calls) == 1
+    assert not env.store.get('last_error:'+env.route)
+
+
+def test_rejected_batch_interrupted_readback_recovers_without_compiling(env, monkeypatch):
+    assign(env)
+    post_batch(env, [candidate(env, 'invalid', 'int target(){return 41;}', file_override={'source_bytes': 999})])
+    original = env.notion.messages
+    failed = [False]
+    def messages(page):
+        rows = original(page)
+        if page == lane(env)['outbox'] and not failed[0] and any(r.get('payload', {}).get('status') == 'BATCH_REJECTED' for r in rows):
+            failed[0] = True
+            raise RuntimeError('Readback interrupted')
+        return rows
+    monkeypatch.setattr(env.notion, 'messages', messages)
+    env.engine.poll()
+    assert failed[0] and not env.store.get('message:'+env.route+':batch-1')
+    env.engine.poll()
+    assert env.store.get('message:'+env.route+':batch-1')
+    assert env.checker.calls == []
+    assert len([r for r in original(lane(env)['outbox']) if r.get('payload', {}).get('status') == 'BATCH_REJECTED']) == 1
