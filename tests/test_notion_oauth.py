@@ -150,3 +150,36 @@ def test_sdk_call_has_an_overall_deadline_and_sanitized_failure(tmp_path,monkeyp
     store=Store(tmp_path); auth=oauth.provider(oauth.TokenStorage(store,staged=True))
     with pytest.raises(NotionError): asyncio.run(oauth.sdk_call(auth,'notion-get-self',{},timeout=.03))
     store.close()
+
+
+def test_sdk_http_rate_limit_preserves_safe_retry_after(tmp_path,monkeypatch):
+    use_mock_http(monkeypatch,lambda request:httpx2.Response(429,headers={'Retry-After':'17'}))
+    store=Store(tmp_path); auth=oauth.provider(oauth.TokenStorage(store,staged=True))
+    with pytest.raises(NotionError) as caught: asyncio.run(oauth.sdk_call(auth,'notion-get-self',{},timeout=1))
+    assert caught.value.status==429 and caught.value.retry_after==17
+    assert caught.value.safe_retry is True
+    store.close()
+
+
+def test_callback_cancellation_does_not_wait_for_login_deadline():
+    import time
+    started=time.monotonic()
+    with oauth.LoopbackCallback(timeout=60) as callback:
+        async def cancel():
+            task=asyncio.create_task(callback.wait()); await asyncio.sleep(.03); task.cancel()
+            with pytest.raises(asyncio.CancelledError): await task
+        asyncio.run(cancel())
+    assert time.monotonic()-started<2
+
+
+def test_tokens_obtained_before_failed_identity_proof_remain_staged(tmp_path):
+    store=Store(tmp_path); store.set_config({'schema':1,'paths':{},'notion_transport':'token','notion_parent_page':'keep-parent'})
+    store.set_secret('notion_token','keep-fallback'); before=store.secrets()
+    async def unproven(auth,*args,**kwargs):
+        await auth.context.storage.set_client_info(OAuthClientInformationFull(client_id='staged',redirect_uris=['http://127.0.0.1:9999/oauth/callback']))
+        await auth.context.storage.set_tokens(OAuthToken(access_token='staged-access',token_type='Bearer',expires_in=3600))
+        return {'content':[{'type':'text','text':'{"workspace":{},"user":{}}'}]}
+    with pytest.raises(oauth.OAuthError): oauth.connect(store,_call=unproven,timeout=1,show=lambda _:None)
+    assert store.secrets()==before and store.config()['notion_parent_page']=='keep-parent'
+    assert store.config()['notion_transport']=='token'
+    store.close()

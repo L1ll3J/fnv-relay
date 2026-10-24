@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import contextmanager
 from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import logging
@@ -151,8 +150,11 @@ def provider(storage, *, callback=None, show=print, open_browser=webbrowser.open
         query['scope']=['default']; auth.context.client_metadata.scope='default'
         parsed=urlsplit(url); url=urlunsplit((parsed.scheme,parsed.netloc,parsed.path,urlencode(query,doseq=True),''))
         show('Open this Notion sign-in link and approve access to your workspace: ' + str(url))
-        try: open_browser(str(url))
-        except Exception: pass  # The displayed link remains usable manually, including WSL.
+        def launch():
+            try: open_browser(str(url))
+            except Exception: pass  # The displayed link remains usable manually, including WSL.
+        # Some text-browser launchers block until the browser exits; never block OAuth on them.
+        threading.Thread(target=launch,daemon=True).start()
     async def forbidden_callback():
         raise OAuthError('Notion sign-in requires auth notion connect.')
     metadata = sdk['OAuthClientMetadata'](client_name='fnv-relay', redirect_uris=[redirect_uri], grant_types=['authorization_code','refresh_token'], response_types=['code'], token_endpoint_auth_method='none', scope='default')
