@@ -16,15 +16,14 @@ def clean(value, limit=80):
 
 
 def starter_prompt(lane):
-    url = "https://www.notion.so/" + page_id(lane["landing"]).replace("-", "")
-    return ("Welcome samurai o7.\n\n"
-            "Open this Notion landing page:\n" + url + "\n\n"
-            "Register using its exact HELLO record for route:\n" + lane["route_token"] + "\n\n"
-            "Read assignments and results from the lane's outbox. Follow each assignment's schemas and scope. "
-            "Post candidates and messages through Notion; the local relay compiles, checks and submits them.\n\n"
-            "After completing a task, keep checking the outbox for the next assignment. "
-            "Keep original project context private and never request or post credentials. "
-            "If page access fails, report the problem in this chat.")
+    url = "https://app.notion.com/p/" + page_id(lane["landing"]).replace("-", "")
+    return ("Welcome samurai o7\n\n"
+            "Today we're going to be doing some decompiling work, it's hard, but it's honest work. "
+            "You might find it difficult but that's okay, this is largely a game of creative trial-and-error. "
+            "Persistence and clever thinking will pay dividends here.\n\n"
+            "[" + url + "](" + url + ")\n\n"
+            "Read that landing page and register using route UUID `" + lane["route_token"] + "`, "
+            "following its HELLO instructions. Read future assignments and results from that lane’s outbox.")
 
 
 def resolve_lane(store, value):
