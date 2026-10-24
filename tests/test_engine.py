@@ -388,3 +388,43 @@ def test_rejected_batch_interrupted_readback_recovers_without_compiling(env, mon
     assert env.store.get('message:'+env.route+':batch-1')
     assert env.checker.calls == []
     assert len([r for r in original(lane(env)['outbox']) if r.get('payload', {}).get('status') == 'BATCH_REJECTED']) == 1
+
+
+@pytest.mark.parametrize("request_value", ["Please send compiler status", None, [], 17, {"kind":"candidate_artifacts", "source_sha256":"../../outside"}])
+def test_invalid_request_reports_rejection_and_allows_later_batch(env, request_value):
+    assign(env)
+    env.store.set('last_error:'+env.route, {'type':'AttributeError', 'message':"'"+type(request_value).__name__+"' object has no attribute 'get'"})
+    env.notion.append(lane(env)['inbox'], message(env, 'REQUEST', 'bad-request', request=request_value))
+    post_batch(env, [candidate(env, 'after-request', 'int target(){return 41;}')])
+    env.engine.poll()
+    records = env.notion.messages(lane(env)['outbox'])
+    rejection = [r['payload'] for r in records if r.get('payload', {}).get('status') == 'REQUEST_REJECTED']
+    assert len(rejection) == 1
+    assert rejection[0]['reason_code'] == ('invalid_artifact_digest' if isinstance(request_value, dict) else 'request_must_be_object')
+    assert env.store.get('message:'+env.route+':bad-request')
+    assert len(env.checker.calls) == 1
+    assert not env.store.get('last_error:'+env.route)
+    env.engine.poll()
+    assert len(env.checker.calls) == 1
+
+
+def test_request_rejection_readback_failure_blocks_until_confirmed_then_continues(env, monkeypatch):
+    assign(env)
+    env.notion.append(lane(env)['inbox'], message(env, 'REQUEST', 'bad-request', request='Compiler status please'))
+    post_batch(env, [candidate(env, 'after-request', 'int target(){return 41;}')])
+    original = env.notion.messages
+    failed = [False]
+    def messages(page):
+        rows = original(page)
+        if page == lane(env)['outbox'] and not failed[0] and any(r.get('payload', {}).get('status') == 'REQUEST_REJECTED' for r in rows):
+            failed[0] = True
+            raise RuntimeError('Readback interrupted')
+        return rows
+    monkeypatch.setattr(env.notion, 'messages', messages)
+    env.engine.poll()
+    assert failed[0] and env.checker.calls == []
+    assert not env.store.get('message:'+env.route+':bad-request')
+    env.engine.poll()
+    assert env.store.get('message:'+env.route+':bad-request')
+    assert len(env.checker.calls) == 1
+    assert len([r for r in original(lane(env)['outbox']) if r.get('payload', {}).get('status') == 'REQUEST_REJECTED']) == 1

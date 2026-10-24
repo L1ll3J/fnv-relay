@@ -675,6 +675,22 @@ class Engine:
 
     def request(self, lane, message):
         request = message.get('request', {}); lease = lane['lease']; directory = Path(lease['directory']); files = []
+        reason = None
+        if not isinstance(request, dict):
+            reason = 'request_must_be_object'
+        elif request.get('kind') == 'candidate_artifacts':
+            digest = request.get('source_sha256')
+            if not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest):
+                reason = 'invalid_artifact_digest'
+        if reason:
+            self.publish(lane, 'request:'+lease['claim_id']+':'+message['message_id'],
+                         {'status':'REQUEST_REJECTED', 'reason_code':reason,
+                          'supported':['best_candidate','candidate_artifacts','target'],
+                          'scope':{key:lease[key] for key in ('claim_id','pack_sha256')}})
+            previous_error = self.store.get('last_error:'+lane['route_token']) or {}
+            if previous_error.get('message') in ("'"+type(request).__name__+"' object has no attribute 'get'", 'Invalid artifact digest'):
+                self.store.set('last_error:'+lane['route_token'], None)
+            return
         if request.get('kind') == 'best_candidate':
             pointer = directory/'checked-best.json'
             if pointer.exists():
@@ -683,7 +699,6 @@ class Engine:
                 files = [source]
         elif request.get('kind') == 'candidate_artifacts':
             digest = request.get('source_sha256')
-            if not isinstance(digest,str) or not re.fullmatch('[0-9a-f]{64}',digest): raise ValueError('Invalid artifact digest')
             record = self.store.get('check:'+lease['claim_id']+':'+digest)
             if record and record.get('state')=='complete':
                 files.append(directory/'sources'/(digest+'.cpp'))
