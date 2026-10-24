@@ -120,7 +120,8 @@ def configure(store, args):
     for name in PATHS:
         value = getattr(args, name)
         if value is not None:
-            paths[name] = str(Path(value).expanduser().resolve())
+            path = Path(value).expanduser()
+            paths[name] = str(path.absolute() if name == "python" else path.resolve())
     if args.max_candidate_bytes is not None:
         if not 0 < args.max_candidate_bytes <= 16 * 1024 * 1024:
             raise ValueError("Invalid source byte limit")
@@ -161,11 +162,19 @@ def login(store, service):
 
 def host_checks(paths):
     checks = {}
+    validated = None
     try:
-        compiler._config(paths)
+        validated = compiler._config(paths)
         checks["toolchain_files"] = True
     except Exception:
         checks["toolchain_files"] = False
+    checks["checker_python_dependencies"] = False
+    if validated is not None:
+        try:
+            result = subprocess.run([validated["python"], "-I", "-B", "-c", "import capstone"], capture_output=True, timeout=10, check=False)
+            checks["checker_python_dependencies"] = result.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            pass
     checks["linux"] = platform.system() == "Linux"
     for name in ("wine", "wineboot", "wineserver", "unshare"):
         checks[name] = shutil.which(name) is not None

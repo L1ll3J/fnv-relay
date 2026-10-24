@@ -307,3 +307,17 @@ def test_start_grants_continuation_without_unpausing_manual_pause(tmp_path, monk
     engine.resume_lane.assert_called_once_with("continue")
     args = cli.parser().parse_args(["lane", "create", "--model-label", "GPT-confirmed via Web"])
     assert cli.policy(args)["model_label"] == "GPT-confirmed via Web"
+
+
+def test_config_preserves_virtualenv_python_symlink(tmp_path):
+    target = tmp_path / "system-python"
+    target.write_text("interpreter")
+    python = tmp_path / "venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.symlink_to(target)
+    assert call(tmp_path / "state", "config", "--python", str(python)) == 0
+    store = Store(tmp_path / "state")
+    try:
+        assert store.config()["paths"]["python"] == str(python)
+    finally:
+        store.close()
