@@ -139,6 +139,12 @@ class Store:
         rows = self.db.execute("SELECT id,created,kind,data FROM events ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
         return [{"id":row[0], "created":row[1], "kind":row[2], "data":json.loads(row[3])} for row in reversed(rows)]
 
+    def events_after(self, cursor, limit=200):
+        if type(cursor) is not int or cursor < 0 or type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError('Invalid event cursor or limit')
+        rows=self.db.execute('SELECT id,created,kind,data FROM events WHERE id>? ORDER BY id LIMIT ?', (cursor,limit)).fetchall()
+        return [{'id':row[0],'created':row[1],'kind':row[2],'data':json.loads(row[3])} for row in rows]
+
     def operation_record(self, key):
         row = self.db.execute("SELECT key,args_hash,status,result,created,updated FROM operations WHERE key=?", (key,)).fetchone()
         if not row:

@@ -89,9 +89,10 @@ def test_launcher_without_configuration_explains_setup(tmp_path,capsys):
 
 
 class FakeWorker:
-    def __init__(self): self.active=False; self.calls=[]
+    def __init__(self): self.active=False; self.calls=[]; self.live_count=0
     def running(self): return self.active
     def start(self): self.active=True; self.calls.append('start')
+    def live(self): self.live_count+=1
     def stop(self): self.active=False; self.calls.append('stop'); return True
 
 
@@ -139,4 +140,13 @@ def test_menu_eof_stops_managed_worker(tmp_path):
     def eof(_):raise EOFError
     assert interactive.run(store,lambda _:0,ask=eof,show=lambda _:None,worker=worker)==0
     assert worker.calls==['stop']
+    store.close()
+
+
+
+def test_start_opens_live_updates_and_menu_can_reopen_them(tmp_path):
+    store=Store(tmp_path);worker=FakeWorker()
+    interactive.run(store,lambda _:0,ask=answers('1','9','0'),show=lambda _:None,worker=worker)
+    assert worker.calls==['start','stop']
+    assert worker.live_count==2
     store.close()

@@ -87,6 +87,7 @@ def run(store, dispatch, *, ask=None, show=print, worker=None):
             show('6. Account setup')
             show('7. Stop relay')
             show('8. Show recent worker output')
+            show('9. Live updates (Enter returns to menu)')
             show('0. Stop safely and exit')
             try:
                 choice = ask('Choose a number: ').strip()
@@ -98,6 +99,7 @@ def run(store, dispatch, *, ask=None, show=print, worker=None):
                 worker.start()
                 for lane in store.lanes():
                     if lane.get('state') != 'setup' and lane.get('landing'): show_starter(lane,show)
+                if worker.running(): worker.live()
             elif choice == '2': add_lane(store,dispatch,ask=ask,show=show)
             elif choice == '3':
                 lane = choose_lane(store,ask=ask,show=show)
@@ -118,6 +120,7 @@ def run(store, dispatch, *, ask=None, show=print, worker=None):
             elif choice == '6': dispatch(['setup'])
             elif choice == '7': worker.stop()
             elif choice == '8': worker.output()
+            elif choice == '9': worker.live()
             else: show('Enter one of the menu numbers.')
     finally:
         if worker.running(): worker.stop()

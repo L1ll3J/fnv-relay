@@ -102,7 +102,7 @@ def human_status(data):
         if row.get("parked_functions"):
             details.append(str(row["parked_functions"]) + " parked function(s)")
         if row["error_type"]:
-            details.append(row["error_type"])
+            details.append("last error: " + row["error_type"])
         table.append((row["label"] + " / " + row["route_token"][:8], {"waiting_hello":"awaiting web agent", "claim_intent":"claim needs review", "preparing":"sending assignment", "assigned":"working", "resume_pending":"waiting to reclaim", "closed_requires_reconciliation":"needs review"}.get(row["state"],row["state"]), row["address"], str(row["size_bytes"] or "-"), expires, str(row["best_diff"] if row["best_diff"] is not None else "-"), str(row["checks"]), ", ".join(details)))
     widths = [max(len(headers[i]), *(len(clean(row[i], 100)) for row in table)) for i in range(len(headers))]
     lines.append("  ".join(value.ljust(widths[i]) for i, value in enumerate(headers)))

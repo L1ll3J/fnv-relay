@@ -2,7 +2,7 @@
 
 This is a 0.2 preview for Ubuntu/Linux, including Ubuntu under WSL2. Python 3.11.8+ is required. Native Windows has not been verified. Run commands from your extracted package or checkout; no public hosting URL is assumed.
 
-Use `./relay` for the numbered menu after bootstrap. Start keeps the menu available while a managed worker runs, so you can add lanes and show their starters in the same terminal. Choose **0 — Stop safely and exit** when finished. **8 — Show recent worker output** displays startup errors and recent results. If lane creation was interrupted, choose **Add lane** to finish that same lane; recovery reads Notion before any retry, and asks before retrying an uncertain creation whose page cannot be found. Incomplete lanes cannot produce starters. Direct `fnv-relay start` remains available as a foreground command for scripts.
+Use `./relay` for the numbered menu after bootstrap. Start keeps the menu available while a managed worker runs, so you can add lanes and show their starters in the same terminal. Choose **0 — Stop safely and exit** when finished. **8 — Show recent worker output** displays startup errors and recent results. Start also opens a live progress view showing checker differences, counts and errors. Press Enter to return to the menu while work continues; choose **9 — Live updates** to reopen it. If lane creation was interrupted, choose **Add lane** to finish that same lane; recovery reads Notion before any retry, and asks before retrying an uncertain creation whose page cannot be found. Incomplete lanes cannot produce starters. Direct `fnv-relay start` remains available as a foreground command for scripts.
 
 ## First connect Notion inside ChatGPT
 

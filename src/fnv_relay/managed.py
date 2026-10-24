@@ -93,3 +93,11 @@ class MenuWorker:
             self.show('No worker output yet.');return
         from .presentation import clean
         for line in lines:self.show(clean(line,400))
+
+
+    def live(self):
+        from .live import watch
+        watch(self.store,self.show,worker_alive=self.running)
+        if self.process is not None and self.process.poll() not in (None,0):
+            self.show('Worker exited with an error. Recent output:')
+            self.output()

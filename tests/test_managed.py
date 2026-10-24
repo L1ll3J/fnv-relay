@@ -73,3 +73,13 @@ def test_terminal_termination_unwinds_menu_and_stops_worker(tmp_path):
             interactive.run(store,lambda _:0,ask=terminated,show=lambda _:None,worker=worker)
     worker.stop.assert_called_once_with()
     store.close()
+
+
+
+def test_live_view_surfaces_worker_startup_failure_output(tmp_path,monkeypatch):
+    from fnv_relay import live
+    store=Store(tmp_path);worker=managed.MenuWorker(store,lambda _:0,lambda _:None)
+    worker.process=Mock();worker.process.poll.return_value=1
+    monkeypatch.setattr(live,'watch',Mock())
+    worker.output=Mock();worker.live();worker.output.assert_called_once_with()
+    store.close()
