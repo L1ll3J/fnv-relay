@@ -16,7 +16,7 @@ import uuid
 from .store import Store, AlreadyRunning, UncertainOperation, write_json
 from .project import ProjectError
 from .lifecycle import process_identity, owner_alive
-from . import compiler, context, guidance, attempts, official_tools
+from . import compiler, context, guidance, attempts, official_tools, preferences
 
 PROTOCOL = 'fnv-relay/2'
 BANDS = ['<=255', '256-511', '512-1K', '1K-4K', '4K+']
@@ -178,6 +178,7 @@ class Engine:
 
     def create_lane(self, parent, policy, label='Pro lane'):
         attempts.validate(policy.get('max_attempts'))
+        preferences.selected_buckets(policy)
         self.model_label({'policy':policy})
         if any(row.get('state') == 'setup' for row in self.store.lanes()):
             raise ValueError('Finish the incomplete lane setup before adding another lane')
@@ -267,7 +268,7 @@ class Engine:
         available = {r['band']: r for r in self.project.call('list_bands', {})['bands']}
         order = policy.get('order', 'largest')
         if order not in ('largest', 'smallest', 'random'): raise ValueError('Unsupported selection order')
-        choices = [policy['band']] if policy.get('band') else list(BANDS)
+        choices = preferences.selected_buckets(policy)
         bounds = [(0,255),(256,511),(512,1024),(1025,4096),(4097,2**31)]
         choices = [b for b in choices if bounds[BANDS.index(b)][1] >= policy.get('min_bytes',0) and bounds[BANDS.index(b)][0] <= policy.get('max_bytes',2**31)]
         if order == 'random':
@@ -280,14 +281,14 @@ class Engine:
             empty = lane.get('fresh_empty_bands', {}).get(b, 0) if policy.get('allow_attempted',True) is False else 0
             if empty > self.clock(): continue
             if row.get('allowed') and row.get('open', 0) > row.get('reserved_for_new', 0):
-                if policy.get('max_attempts') or policy.get('band'):
+                if policy.get('max_attempts') or policy.get('band') or policy.get('bands'):
                     chosen=attempts.selection(self,lane,b)
                     if chosen:
                         lane.pop('attempt_pool_empty',None);self.store.put_lane(lane)
                         return chosen
                     continue
                 return {'band': b, 'prefer': 'any' if policy.get('allow_attempted',True) else 'fresh', 'context_mode': 'resume'}
-        if policy.get('max_attempts') or policy.get('band'):
+        if policy.get('max_attempts') or policy.get('band') or policy.get('bands'):
             lane['attempt_pool_empty']=True;lane['admission_not_before']=self.clock()+60;self.store.put_lane(lane)
         return None
 

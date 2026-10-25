@@ -67,7 +67,9 @@ def parser():
     create.add_argument("--order", choices=preferences.ORDERS, help="Default: task order saved during setup")
     create.add_argument("--allow-attempted", action=argparse.BooleanOptionalAction, default=None, help="Allow previously attempted functions in new selections")
     create.add_argument("--max-attempts", type=int, default=0, help="Maximum batch rounds per function in this lane; 0 = off")
-    create.add_argument("--band", choices=[value for _,value in preferences.BUCKETS])
+    sizes=create.add_mutually_exclusive_group()
+    sizes.add_argument("--band", choices=[value for _,value in preferences.BUCKETS])
+    sizes.add_argument("--bands", nargs='+', choices=[value for _,value in preferences.BUCKETS], help="Choose multiple size buckets; any selects all")
     create.add_argument("--address")
     create.add_argument("--min-bytes", type=int, default=0)
     create.add_argument("--max-bytes", type=int, default=2**31 - 1)
@@ -76,7 +78,9 @@ def parser():
     settings = lane.add_parser("configure", help="Change future selection; optionally park current work and switch now")
     settings.add_argument("route")
     settings.add_argument("--order", choices=preferences.ORDERS)
-    settings.add_argument("--band", choices=[value for _,value in preferences.BUCKETS], help="Future function size bucket; any clears the bucket filter")
+    sizes=settings.add_mutually_exclusive_group()
+    sizes.add_argument("--band", choices=[value for _,value in preferences.BUCKETS], help="Future function size bucket; any clears the bucket filter")
+    sizes.add_argument("--bands", nargs='+', choices=[value for _,value in preferences.BUCKETS], help="Future size buckets; any selects all")
     settings.add_argument("--allow-attempted", action=argparse.BooleanOptionalAction, default=None)
     settings.add_argument("--paused", action=argparse.BooleanOptionalAction, default=None, help="Pause or unpause future selections")
     settings.add_argument("--max-attempts", type=int, help="Batch rounds per function, including existing rounds; 0 = off")
@@ -138,8 +142,7 @@ def policy(args):
         result["max_attempts"]=args.max_attempts
     if getattr(args,"allow_attempted",None) is not None:
         result["allow_attempted"] = args.allow_attempted
-    if args.band and args.band != "any":
-        result["band"] = args.band
+    preferences.set_buckets(result,band=args.band,bands=getattr(args,'bands',None))
     if args.address:
         result["address"] = args.address
     return result
@@ -266,7 +269,7 @@ def lane_command(store, args):
         lane = presentation.resolve_lane(store,args.route)
         project = FNV(store.secrets().get('fnv_api_key','')) if args.switch_now and lane.get('lease') else None
         engine = Engine(store,project,None,watchdog=False)
-        options=dict(order=args.order,allow_attempted=args.allow_attempted,switch_now=args.switch_now,paused=args.paused,max_attempts=args.max_attempts,band=args.band)
+        options=dict(order=args.order,allow_attempted=args.allow_attempted,switch_now=args.switch_now,paused=args.paused,max_attempts=args.max_attempts,band=args.band,bands=args.bands)
         try:
             with store.lock('serve'):
                 lane=configure_lane(engine,lane['route_token'],**options)
