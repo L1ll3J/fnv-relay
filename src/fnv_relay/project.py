@@ -17,7 +17,7 @@ from .notion import _retry_after
 
 USER_AGENT = "fnv-relay/" + __version__
 
-READ_TOOLS = frozenset({"status", "list_bands", "function_info", "function_history", "packet"})
+READ_TOOLS = frozenset({"status", "list_bands", "function_info", "function_history", "list_functions", "notices", "packet"})
 MAX_PACK = 1024 ** 3
 MAX_INLINE_BACKOFF = 30
 

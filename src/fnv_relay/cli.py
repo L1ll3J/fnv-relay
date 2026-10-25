@@ -66,6 +66,7 @@ def parser():
     create.add_argument("--auto-resume", action=argparse.BooleanOptionalAction, default=True, help="Continue unfinished function after release when agent activity is recent")
     create.add_argument("--order", choices=preferences.ORDERS, help="Default: task order saved during setup")
     create.add_argument("--allow-attempted", action=argparse.BooleanOptionalAction, default=None, help="Allow previously attempted functions in new selections")
+    create.add_argument("--max-attempts", type=int, default=0, help="Maximum batch rounds per function in this lane; 0 = off")
     create.add_argument("--band", choices=BANDS)
     create.add_argument("--address")
     create.add_argument("--min-bytes", type=int, default=0)
@@ -77,6 +78,7 @@ def parser():
     settings.add_argument("--order", choices=preferences.ORDERS)
     settings.add_argument("--allow-attempted", action=argparse.BooleanOptionalAction, default=None)
     settings.add_argument("--paused", action=argparse.BooleanOptionalAction, default=None, help="Pause or unpause future selections")
+    settings.add_argument("--max-attempts", type=int, help="Batch rounds per function, including existing rounds; 0 = off")
     settings.add_argument("--switch-now", action="store_true", help="Release and preserve current work, then select a different task")
     recover = lane.add_parser("recover", help="Finish an incomplete lane setup using Notion readback")
     recover.add_argument("route")
@@ -120,6 +122,8 @@ def clients(store):
 
 
 def policy(args):
+    from .attempts import validate
+    validate(getattr(args,'max_attempts',0))
     if not 0 <= args.min_bytes <= args.max_bytes <= 2**31 - 1:
         raise ValueError("Invalid byte bounds")
     if args.address and not re.fullmatch(r"0x[0-9a-fA-F]{1,8}", args.address):
@@ -129,6 +133,8 @@ def policy(args):
     if not args.model_label.strip() or len(args.model_label) > 100 or any(ord(c) < 32 for c in args.model_label):
         raise ValueError("Invalid model label")
     result = {"model_label": args.model_label.strip(), "order": args.order, "min_bytes": args.min_bytes, "max_bytes": args.max_bytes, "auto_resume_unfinished": args.auto_resume}
+    if getattr(args,"max_attempts",0):
+        result["max_attempts"]=args.max_attempts
     if getattr(args,"allow_attempted",None) is not None:
         result["allow_attempted"] = args.allow_attempted
     if args.band:
@@ -259,7 +265,7 @@ def lane_command(store, args):
         lane = presentation.resolve_lane(store,args.route)
         project = FNV(store.secrets().get('fnv_api_key','')) if args.switch_now and lane.get('lease') else None
         engine = Engine(store,project,None,watchdog=False)
-        options=dict(order=args.order,allow_attempted=args.allow_attempted,switch_now=args.switch_now,paused=args.paused)
+        options=dict(order=args.order,allow_attempted=args.allow_attempted,switch_now=args.switch_now,paused=args.paused,max_attempts=args.max_attempts)
         try:
             with store.lock('serve'):
                 lane=configure_lane(engine,lane['route_token'],**options)

@@ -291,3 +291,10 @@ def test_lock_can_wait_for_other_holder_and_timeout_is_bounded(tmp_path):
             with store.lock('session',timeout=.02):pass
     with store.lock('session',timeout=.02):pass
     store.close()
+
+
+def test_new_function_listing_is_read_only_and_retries_transient_transport_failure():
+    server=Server(error(503),{'order':'size','functions':[],'next':None})
+    assert server.client().call('list_functions',{'limit':500})['functions']==[]
+    assert len(server.calls)==2
+    assert server.sleeps==[1]

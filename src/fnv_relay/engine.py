@@ -16,7 +16,7 @@ import uuid
 from .store import Store, AlreadyRunning, UncertainOperation, write_json
 from .project import ProjectError
 from .lifecycle import process_identity, owner_alive
-from . import compiler, context, guidance
+from . import compiler, context, guidance, attempts
 
 PROTOCOL = 'fnv-relay/2'
 BANDS = ['<=255', '256-511', '512-1K', '1K-4K', '4K+']
@@ -177,6 +177,7 @@ class Engine:
         return label
 
     def create_lane(self, parent, policy, label='Pro lane'):
+        attempts.validate(policy.get('max_attempts'))
         self.model_label({'policy':policy})
         if any(row.get('state') == 'setup' for row in self.store.lanes()):
             raise ValueError('Finish the incomplete lane setup before adding another lane')
@@ -258,7 +259,7 @@ class Engine:
         limits = status['limits']; own = [c for c in status['open_claims'] if c.get('this_key')]
         if len(status['open_claims']) >= limits['claims'] or status['submissions_today'] + len(own) >= limits['subsPerDay'] or status['awaiting_verification'] + len(own) >= limits['pending']: return None
         parked_addresses = {x['continuation']['address'].lower() for x in lane.get('parked',[])}
-        if policy.get('address') and policy['address'].lower() not in parked_addresses: return {'address': policy['address'], 'context_mode': 'resume'}
+        if policy.get('address') and policy['address'].lower() not in parked_addresses and not attempts.capped(self.store,lane,policy['address']): return {'address': policy['address'], 'context_mode': 'resume'}
         # Random selection shuffles size bands; the service chooses within a band.
         available = {r['band']: r for r in self.project.call('list_bands', {})['bands']}
         order = policy.get('order', 'largest')
@@ -276,7 +277,15 @@ class Engine:
             empty = lane.get('fresh_empty_bands', {}).get(b, 0) if policy.get('allow_attempted',True) is False else 0
             if empty > self.clock(): continue
             if row.get('allowed') and row.get('open', 0) > row.get('reserved_for_new', 0):
+                if policy.get('max_attempts'):
+                    chosen=attempts.selection(self,lane,b)
+                    if chosen:
+                        lane.pop('attempt_pool_empty',None);self.store.put_lane(lane)
+                        return chosen
+                    continue
                 return {'band': b, 'prefer': 'any' if policy.get('allow_attempted',True) else 'fresh', 'context_mode': 'resume'}
+        if policy.get('max_attempts'):
+            lane['attempt_pool_empty']=True;lane['admission_not_before']=self.clock()+60;self.store.put_lane(lane)
         return None
 
     def defer_claim(self, lane, denial):
@@ -326,6 +335,8 @@ class Engine:
         with self.lane_lock(lane['route_token']):
             self.refresh(lane)
             if self.admission_blocked() or not self.ready_for_claim(lane) or lane['state'] not in ('idle', 'resume_pending'): return
+            attempts.tick(self,lane)
+            if lane.get('attempt_handoff'):return
             resume = lane.get('resume')
             deadline = max(lane.get('admission_not_before', 0), self.store.get('project_not_before') or 0, (resume or {}).get('not_before', 0))
             if self.clock() < deadline: return
@@ -420,7 +431,7 @@ class Engine:
         scope = {'route_token': lane['route_token'], 'claim_id': cid, 'pack_sha256': lease['pack_sha256']}
         schema = {'protocol': PROTOCOL, 'kind': 'CANDIDATE', 'sender': 'chatgpt', **scope, 'candidate_id': 'UNIQUE_CANDIDATE', 'files': [{'filename': 'candidate.cpp', 'source_utf8': 'COMPLETE_SOURCE', 'source_sha256': 'SHA256', 'source_bytes': 0}]}
         batch = {'protocol': PROTOCOL, 'kind': 'BATCH', 'sender': 'chatgpt', 'message_id': 'UNIQUE_MESSAGE', **scope, 'candidates': [{'candidate_id': 'UNIQUE_CANDIDATE', 'page': 'NOTION_PAGE_UUID'}]}
-        self.publish(lane, key, {'next_action':dict(NEXT_ACTION), 'status': 'ASSIGNED', 'scope': scope, 'lease': lease, 'pages': pages, 'candidate_schema': schema, 'batch_schema': batch, 'source_limit_bytes': self.config.get('max_candidate_bytes', 1048576), 'instructions': 'Match the complete assigned function using original pack/types/flags. Use named-field C++, no asm/naked/raw-byte or absolute-address tricks. Save complete sources as CANDIDATE JSON pages. Three or four distinct candidates per batch are encouraged; max8. There is NO total check cap. A MATCH still needs independent plain validation. Only controller submits using the owner API key. Do not send commands or credentials. Stop new candidates before expiry minus14minutes. Ask REQUEST for small missing context. The local controller manages claim release and continuation. Report suspected defects with DEFECT_PROPOSAL; these queue for review and never automatically flag solely on your assertion. For source>24k characters use parts:[{page,part_index,chunk_sha256}] instead ofsource_utf8; eachpage haskindSOURCE_CHUNK andsameclaim/pack/route/candidate scope, source_utf8 andpart_index. Whole sourceSHA/bytes are required on CANDIDATE file.'})
+        self.publish(lane, key, {'next_action':dict(NEXT_ACTION), 'status': 'ASSIGNED', 'scope': scope, 'lease': lease, 'pages': pages, 'candidate_schema': schema, 'batch_schema': batch, 'source_limit_bytes': self.config.get('max_candidate_bytes', 1048576), 'instructions': 'Match the complete assigned function using original pack/types/flags. Use named-field C++, no asm/naked/raw-byte or absolute-address tricks. Save complete sources as CANDIDATE JSON pages. Batches may contain 1–8 distinct candidates. Three or four are encouraged when useful for efficient comparison; a single targeted candidate is valid. A MATCH still needs independent plain validation. Only controller submits using the owner API key. Do not send commands or credentials. Stop new candidates before expiry minus14minutes. Ask REQUEST for small missing context. The local controller manages claim release and continuation. Report suspected defects with DEFECT_PROPOSAL; these queue for review and never automatically flag solely on your assertion. For source>24k characters use parts:[{page,part_index,chunk_sha256}] instead ofsource_utf8; eachpage haskindSOURCE_CHUNK andsameclaim/pack/route/candidate scope, source_utf8 andpart_index. Whole sourceSHA/bytes are required on CANDIDATE file.'})
         with self.lane_lock(lane['route_token']):
             if not self.preparing_current(lane, cid): return
             lane['state'] = 'assigned'; lane.pop('resume', None); self.store.put_lane(lane)
@@ -548,6 +559,10 @@ class Engine:
             self.publish(lane, publication, rejection)
             if (self.store.get('last_error:'+lane['route_token']) or {}).get('message') == str(error):
                 self.store.set('last_error:'+lane['route_token'], None)
+            return
+        if not attempts.reserve(self,lane,publication,identity):
+            self.store.set('batch-result:'+publication,{'status':'BATCH_REJECTED','reason_code':'attempt_limit','checks_performed':0})
+            attempts.tick(self,lane)
             return
         lease = dict(lane['lease']); directory = Path(lease['directory']); (directory/'sources').mkdir(exist_ok=True)
         results = []
@@ -817,6 +832,7 @@ class Engine:
                 self.publish_closed_leases(lane)
                 if lane['state'] in ('setup','claim_intent','preparing','closed_requires_reconciliation') or lane.get('paused'): continue
                 self.ensure_work_guidance(lane)
+                attempts.tick(self,lane)
                 for message in self.notion.messages(lane['inbox']):
                     if self.stop_requested(): break
                     if self.store.get('lane_control:'+lane['route_token']): break
@@ -847,6 +863,7 @@ class Engine:
                     if kind in ('HELLO','READY'): pass
                     elif kind=='BATCH' and lane['state']=='assigned': self.batch(lane,message)
                     elif kind=='REQUEST': self.scope(lane,message); self.request(lane,message)
+                    elif kind=='HANDOFF': attempts.receive(self,lane,message)
                     elif kind in ('DEFECT_PROPOSAL','FINDING'):
                         self.scope(lane,message); self.store.event(kind.lower(),message)
                         with self.lane_lock(lane['route_token']):
@@ -856,6 +873,10 @@ class Engine:
                         self.publish(lane,'note:'+lane['route_token']+':'+mid,{'status':'RECORDED_REVIEW_ONLY','message_id':mid,'instructions':'No automatic flag was sent. Source/log context is retained. Continue permitted work while the current assignment remains active.'})
                     else: continue
                     self.store.set(key,identity)
+                    control_changed=bool(self.store.get('lane_control:'+lane['route_token']))
+                    if control_changed:process_lane_control(self,lane)
+                    attempts.tick(self,lane)
+                    if control_changed:break
                 self.refresh(lane)
                 process_lane_control(self,lane)
                 if lane['state'] in ('idle','resume_pending') and not self.stop_requested(): self.assign(lane)

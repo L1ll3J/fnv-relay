@@ -43,7 +43,8 @@ def resolve_lane(store, value):
 
 def snapshot(store, version):
     rows = []
-    for lane in store.lanes():
+    lanes = store.lanes()
+    for lane in lanes:
         lease = lane.get("lease") or {}
         claim = lease.get("claim_id")
         best = None
@@ -59,6 +60,11 @@ def snapshot(store, version):
         if not isinstance(error_type, str) or not re.fullmatch(r"[A-Za-z_]{1,80}", error_type):
             error_type = None
         rows.append({"route_token": lane["route_token"], "label": clean(lane.get("label", "Lane")), "state": clean(lane.get("state")), "paused": bool(lane.get("paused")), "auto_resume": bool(lane.get("policy", {}).get("auto_resume_unfinished", False)), "model_label": clean(lane.get("policy", {}).get("model_label", "ChatGPT Web via Notion")), "claim_id": claim, "address": clean(lease.get("address") or (lane.get("resume") or {}).get("address")), "size_bytes": lease.get("size"), "expires_at": lease.get("expires"), "best_diff": best, "checks": store.get("checks:" + claim) or 0 if claim else 0, "error_type": error_type, "continuation": bool(lane.get("resume")), "parked_functions": len(lane.get("parked", [])), "cooldown_until": (lane.get("resume") or {}).get("not_before"), "has_active_lease": bool(lease), "landing": lane.get("landing")})
+    from .attempts import current
+    for row,lane in zip(rows,lanes):
+        row['attempts']=current(store,lane)
+        row['max_attempts']=lane.get('policy',{}).get('max_attempts') or 0
+        row['awaiting_handoff']=bool(lane.get('attempt_handoff'))
     secrets = store.secrets()
     oauth = secrets.get("notion_oauth") or {}
     oauth_tokens = oauth.get("tokens") or {}
@@ -81,7 +87,7 @@ def human_status(data):
         lines.append("FNV account (refreshed): " + ", ".join(key + "=" + clean(value) for key, value in account.items()) + "; tracked lanes=" + str(len(data["lanes"])))
     if not data["lanes"]:
         return "\n".join(lines + ["No lanes yet. Run fnv-relay setup."])
-    headers = ("LANE / ROUTE", "STATE", "FUNCTION", "SIZE", "EXPIRES UTC", "BEST", "CHECKS", "DETAILS")
+    headers = ("LANE / ROUTE", "STATE", "FUNCTION", "SIZE", "EXPIRES UTC", "BEST", "CHECKS", "ATTEMPTS", "DETAILS")
     table = []
     for row in data["lanes"]:
         expires = "-"
@@ -103,7 +109,7 @@ def human_status(data):
             details.append(str(row["parked_functions"]) + " parked function(s)")
         if row["error_type"]:
             details.append("last error: " + row["error_type"])
-        table.append((row["label"] + " / " + row["route_token"][:8], {"waiting_hello":"awaiting web agent", "claim_intent":"claim needs review", "preparing":"sending assignment", "assigned":"working", "resume_pending":"waiting to reclaim", "closed_requires_reconciliation":"needs review"}.get(row["state"],row["state"]), row["address"], str(row["size_bytes"] or "-"), expires, str(row["best_diff"] if row["best_diff"] is not None else "-"), str(row["checks"]), ", ".join(details)))
+        table.append((row["label"] + " / " + row["route_token"][:8], {"waiting_hello":"awaiting web agent", "claim_intent":"claim needs review", "preparing":"sending assignment", "assigned":"working", "resume_pending":"waiting to reclaim", "closed_requires_reconciliation":"needs review"}.get(row["state"],row["state"]), row["address"], str(row["size_bytes"] or "-"), expires, str(row["best_diff"] if row["best_diff"] is not None else "-"), str(row["checks"]), str(row.get("attempts",0))+" / "+(str(row.get("max_attempts")) if row.get("max_attempts") else "off"), ", ".join(details)))
     widths = [max(len(headers[i]), *(len(clean(row[i], 100)) for row in table)) for i in range(len(headers))]
     lines.append("  ".join(value.ljust(widths[i]) for i, value in enumerate(headers)))
     lines.extend("  ".join(clean(value, 100).ljust(widths[i]) for i, value in enumerate(row)) for row in table)

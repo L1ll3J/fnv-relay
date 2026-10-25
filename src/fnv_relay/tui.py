@@ -60,6 +60,8 @@ class AddLaneScreen(ModalScreen[dict | None]):
             yield Input('Lane '+str(self.number),placeholder='Lane name',id='new-label',max_length=100)
             yield Select([('Largest first','largest'),('Smallest first','smallest'),('Random size band','random')],value='largest',allow_blank=False,id='new-order')
             yield Checkbox('Allow previously attempted functions',value=False,id='new-attempted')
+            yield Input('0',placeholder='Batch attempt limit per function (0 = off)',id='new-max-attempts',type='integer')
+            yield Static('Attempt limit: 0 = off. One accepted batch is one round, whether it has one candidate or eight.')
             yield Static('Unchecked = fresh functions only. Random shuffles eligible size bands; FNV selects a function within a band.')
             with Horizontal(classes='buttons'):
                 yield Button('Create lane',id='create',variant='primary')
@@ -69,7 +71,12 @@ class AddLaneScreen(ModalScreen[dict | None]):
         if event.button.id=='cancel':self.dismiss(None);return
         label=self.query_one('#new-label',Input).value.strip()
         if not label:self.notify('Enter a lane name.',severity='warning');return
-        self.dismiss({'label':label,'order':self.query_one('#new-order',Select).value,
+        try:
+            maximum=int(self.query_one('#new-max-attempts',Input).value)
+            from .attempts import validate
+            validate(maximum)
+        except ValueError:self.notify('Enter a non-negative attempt limit (0 = off).',severity='warning');return
+        self.dismiss({'label':label,'max_attempts':maximum,'order':self.query_one('#new-order',Select).value,
                       'allow_attempted':self.query_one('#new-attempted',Checkbox).value})
 
 
@@ -113,7 +120,7 @@ class RelayApp(App):
         self.selected=None;self.busy=False;self.data=None;self.table_shape=None;self.route_options=None
         self.entries=presets.load(store);self.note_id=self.entries[0]['id'] if self.entries else None
         self.note_loading=False
-        self.settings=store.get('terminal_display') or {'size':True,'lease':True,'checks':True,'best':True,'stagnation':True,'policy':True,'metric':'ndiff_insn'}
+        self.settings=store.get('terminal_display') or {'size':True,'lease':True,'checks':True,'attempts':True,'best':True,'stagnation':True,'policy':True,'metric':'ndiff_insn'}
         self.sub_title=store.root.name
 
     def compose(self) -> ComposeResult:
@@ -135,6 +142,8 @@ class RelayApp(App):
                     yield Static('',id='policy-info',markup=False)
                     yield Select([('Largest first','largest'),('Smallest first','smallest'),('Random size band','random')],allow_blank=False,value='largest',id='order')
                     yield Checkbox('Allow previously attempted functions',value=True,id='allow-attempted')
+                    yield Static('Batch attempt limit per function: 0 = off. Existing rounds in this lane count across reconnects. An active handoff finishes even if the limit is changed.',classes='help')
+                    yield Input('0',id='max-attempts',type='integer')
                     yield Checkbox('Park current work and choose a new function now',value=False,id='switch-now')
                     yield Static('Fresh only never falls back to attempted work. Random shuffles size bands. Switching preserves sources, best results and history.',classes='help')
                     with Horizontal(classes='buttons'):
@@ -166,7 +175,7 @@ class RelayApp(App):
                 with VerticalScroll():
                     yield Static('Choose which columns appear in Overview. Preferences are saved for this profile.',classes='help')
                     yield Select([('Official instruction differences','ndiff_insn'),('Full-extent diagnostic differences','full_extent_ndiff_insn')],value=self.settings.get('metric','ndiff_insn'),allow_blank=False,id='metric')
-                    for key,label in [('size','Function size'),('lease','Lease expiry'),('checks','Check count'),('best','Best differences'),('stagnation','Checks / time since best'),('policy','Selection policy')]:
+                    for key,label in [('size','Function size'),('lease','Lease expiry'),('checks','Check count'),('attempts','Batch attempts / limit'),('best','Best differences'),('stagnation','Checks / time since best'),('policy','Selection policy')]:
                         yield Checkbox(label,value=self.settings.get(key,True),id='metric-'+key)
                     yield Static('Official and full-extent counts measure different scopes. This display choice does not change submission validation.',classes='help')
                     yield Static('',id='account-info',markup=False)
@@ -206,6 +215,7 @@ class RelayApp(App):
         if self.settings.get('size',True):columns.append(('size','Bytes'))
         if self.settings.get('best',True):columns.append(('best','Best'))
         if self.settings.get('checks',True):columns.append(('checks','Checks'))
+        if self.settings.get('attempts',True):columns.append(('attempts','Attempts'))
         if self.settings.get('stagnation',True):columns += [('since_checks','Checks since best'),('since_time','Time since best')]
         if self.settings.get('lease',True):columns.append(('expires','Lease UTC'))
         if self.settings.get('policy',True):columns.append(('policy','Selection'))
@@ -218,12 +228,12 @@ class RelayApp(App):
             for key,label in columns:table.add_column(label,key=key)
         for row in rows:
             progress=self.model.progress(row['route_token'],row['claim_id'],self.settings.get('metric','ndiff_insn'))
-            values={'label':row['label'],'state':{'assigned':'working','waiting_hello':'awaiting agent','resume_pending':'saved work ready'}.get(row['state'],row['state']),
+            values={'label':row['label'],'state':{'assigned':'awaiting handoff' if row['awaiting_handoff'] else 'working','waiting_hello':'awaiting agent','resume_pending':'saved work ready'}.get(row['state'],row['state']),
                     'address':row['address'],'size':str(row['size_bytes'] or '—'),'best':str(progress['best']) if progress['best'] is not None else '—',
-                    'checks':str(row['checks']),'since_checks':str(progress['checks_since_best']) if progress['checks_since_best'] is not None else '—',
+                    'checks':str(row['checks']),'attempts':str(row['attempts'])+(' / '+str(row['max_attempts']) if row['max_attempts'] else ' / off'),'since_checks':str(progress['checks_since_best']) if progress['checks_since_best'] is not None else '—',
                     'since_time':progress['since_best'],'expires':clock(row['expires_at']),
                     'policy':row['order']+(' · fresh' if not row['allow_attempted'] else ' · any'),
-                    'error':'change queued' if row['control_pending'] else 'waiting for fresh work' if row['waiting_fresh'] else row['error_type'] or '—'}
+                    'error':'change queued' if row['control_pending'] else 'handoff requested' if row['awaiting_handoff'] else 'waiting for eligible work' if row['attempt_pool_empty'] else 'waiting for fresh work' if row['waiting_fresh'] else row['error_type'] or '—'}
             cells=[Text(values[key]) for key,_ in columns]
             if changed:table.add_row(*cells,key=row['route_token'])
             else:
@@ -257,6 +267,8 @@ class RelayApp(App):
         text=lane.get('label','Lane')+' · '+self.selected+'\n'
         text+=('Selection change queued; current batch may finish. ' if pending else '')
         text+='Saved functions: '+str(len(lane.get('parked',[])))
+        row=next((x for x in self.data['lanes'] if x['route_token']==self.selected),None) if self.data else None
+        if row:text+=' · Batch attempts: '+str(row['attempts'])+' / '+(str(row['max_attempts']) if row['max_attempts'] else 'off')
         if lane.get('fresh_empty_bands') and not lane.get('lease'):
             text+='\nSome fresh size bands are empty. Selection continues without falling back to attempted functions.'
         if error:text+='\nLast recorded error (may be historical): '+presentation.clean(error.get('type'))+' · '+presentation.clean(error.get('message'),350)
@@ -268,6 +280,7 @@ class RelayApp(App):
         self.query_one('#policy-info',Static).update(Text(lane.get('label','Lane')+' · '+self.selected))
         self.query_one('#order',Select).value=policy.get('order','largest')
         self.query_one('#allow-attempted',Checkbox).value=policy.get('allow_attempted',True)
+        self.query_one('#max-attempts',Input).value=str(policy.get('max_attempts') or 0)
         saved=[('Continue current saved work','current')]
         saved += [(x['continuation']['address']+' · '+x['reason'],x['continuation']['address']) for x in lane.get('parked',[])]
         self.query_one('#saved-work',Select).set_options(saved)
@@ -383,7 +396,7 @@ class RelayApp(App):
     async def action_quit(self):await self.stop_worker(exit_after=True)
 
     def choose_add(self,choice):
-        if choice:self.launch_command(['lane','create','--label',choice['label'],'--order',choice['order'],'--allow-attempted' if choice['allow_attempted'] else '--no-allow-attempted'])
+        if choice:self.launch_command(['lane','create','--label',choice['label'],'--order',choice['order'],'--allow-attempted' if choice['allow_attempted'] else '--no-allow-attempted','--max-attempts',str(choice.get('max_attempts',0))])
 
     def update_notepad_options(self):
         self.note_loading=True
@@ -421,7 +434,8 @@ class RelayApp(App):
             self.push_screen(PromptScreen(presentation.starter_prompt(lane)))
         elif action=='apply-policy' and self.selected:
             args=['lane','configure',self.selected,'--order',self.query_one('#order',Select).value,
-                  '--allow-attempted' if self.query_one('#allow-attempted',Checkbox).value else '--no-allow-attempted']
+                  '--allow-attempted' if self.query_one('#allow-attempted',Checkbox).value else '--no-allow-attempted',
+                  '--max-attempts',self.query_one('#max-attempts',Input).value]
             if self.query_one('#switch-now',Checkbox).value:
                 args.append('--switch-now');self.push_screen(ConfirmScreen('Preserve and release the current assignment, park its work, and select a new function with these settings?'),lambda yes:self.launch_command(args) if yes else None)
             else:self.launch_command(args)

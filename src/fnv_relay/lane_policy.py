@@ -1,8 +1,10 @@
 """Owner-controlled selection policy; current work is never silently discarded."""
 from .preferences import ORDERS
+from .attempts import validate
 
 
-def configure(engine, route, *, order=None, allow_attempted=None, switch_now=False, paused=None):
+def configure(engine, route, *, order=None, allow_attempted=None, switch_now=False, paused=None, max_attempts=None):
+    validate(max_attempts)
     if order is not None and order not in ORDERS:
         raise ValueError('Unknown task order')
     if allow_attempted is not None and type(allow_attempted) is not bool:
@@ -32,6 +34,7 @@ def configure(engine, route, *, order=None, allow_attempted=None, switch_now=Fal
             policy['order'] = order
         if allow_attempted is not None:
             policy['allow_attempted'] = allow_attempted
+        if max_attempts is not None:policy['max_attempts']=max_attempts
         if switch_now:
             policy.pop('address', None)
             policy.pop('band', None)
@@ -43,6 +46,7 @@ def configure(engine, route, *, order=None, allow_attempted=None, switch_now=Fal
             lane['explicit_resume']=not paused
             if not paused: lane['ready']=True; lane.pop('blocked_reason',None)
         lane.pop('fresh_empty_bands', None)
+        if lane.pop('attempt_pool_empty',False):lane.pop('admission_not_before',None)
         engine.store.put_lane(lane)
         engine.store.set('policy_miss:'+route, None)
         engine.store.event('lane_policy_changed', {'route_token':route, 'order':policy.get('order','largest'),
@@ -52,6 +56,7 @@ def configure(engine, route, *, order=None, allow_attempted=None, switch_now=Fal
 
 def queue(store, route, **options):
     from uuid import uuid4
+    validate(options.get('max_attempts'))
     if options.get('order') is not None and options['order'] not in ORDERS:
         raise ValueError('Unknown task order')
     if options.get('allow_attempted') is not None and type(options['allow_attempted']) is not bool:

@@ -64,6 +64,7 @@ class Dashboard:
             lane=next(x for x in lanes if x['route_token']==row['route_token'])
             row['order']=lane.get('policy',{}).get('order','largest')
             row['allow_attempted']=lane.get('policy',{}).get('allow_attempted',True)
+            row['attempt_pool_empty']=bool(lane.get('attempt_pool_empty'))
             row['control_pending']=bool(self.store.get('lane_control:'+row['route_token']))
             row['waiting_fresh']=bool(lane.get('fresh_empty_bands')) and not row['has_active_lease'] and not row['allow_attempted']
         return data

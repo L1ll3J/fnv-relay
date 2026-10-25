@@ -235,3 +235,20 @@ def test_interactive_signin_uses_child_with_exact_profile_and_no_nested_dispatch
     assert app.interactive_command(['auth','notion','connect'])==0
     assert calls==[[sys.executable,'-u','-m','fnv_relay.cli','--state-dir',str(store.root),'auth','notion','connect']]
     store.close()
+
+
+def test_attempt_limit_controls_and_overview_default_off(tmp_path):
+    async def check():
+        store=make_store(tmp_path);app=RelayApp(store,lambda _:None,worker=FakeWorker())
+        async with app.run_test(size=(170,55)) as pilot:
+            assert 'attempts' in app.table_shape[0]
+            await pilot.press('f2');await pilot.pause()
+            assert app.query_one('#max-attempts',Input).value=='0'
+            calls=[];app.launch_command=calls.append
+            app.query_one('#max-attempts',Input).value='12'
+            button=app.query_one('#apply-policy');button.scroll_visible();await pilot.pause()
+            await pilot.click('#apply-policy');await pilot.pause()
+            assert calls and calls[0][-2:]==['--max-attempts','12']
+            assert store.lane('route-one')['policy'].get('max_attempts',0)==0
+        store.close()
+    asyncio.run(check())
