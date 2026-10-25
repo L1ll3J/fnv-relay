@@ -11,6 +11,41 @@ def validate_bucket(value):
         raise ValueError('Unknown size bucket')
 
 
+def validate_buckets(values):
+    if values is None: return
+    if not isinstance(values, list) or not values:
+        raise ValueError('Select at least one size bucket')
+    for value in values:
+        if value is None:raise ValueError('Unknown size bucket')
+        validate_bucket(value)
+    if 'any' in values and len(values) != 1:
+        raise ValueError('Any size cannot be combined with individual buckets')
+
+
+def selected_buckets(policy):
+    values=policy.get('bands')
+    if values is not None:
+        validate_buckets(values)
+    else:
+        value=policy.get('band') or 'any';validate_bucket(value);values=[value]
+    return [value for _,value in BUCKETS[1:] if 'any' in values or value in values]
+
+
+def set_buckets(policy, *, band=None, bands=None):
+    validate_bucket(band);validate_buckets(bands)
+    if band is not None and bands is not None:raise ValueError('Choose band or bands, not both')
+    if band is None and bands is None:return
+    selected=selected_buckets({'bands':bands} if bands is not None else {'band':band})
+    policy.pop('band',None);policy.pop('bands',None)
+    if len(selected)==1:policy['band']=selected[0]
+    elif len(selected)!=len(BUCKETS)-1:policy['bands']=selected
+
+
+def bucket_label(policy):
+    selected=selected_buckets(policy)
+    return 'Any size' if len(selected)==len(BUCKETS)-1 else ', '.join(label for label,value in BUCKETS if value in selected)
+
+
 def choose_order(store, *, ask=None, show=print):
     ask = ask or input
     current = store.config().get('default_task_order', 'largest')

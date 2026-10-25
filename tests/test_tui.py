@@ -1,9 +1,9 @@
 import asyncio
 from pathlib import Path
 
-from textual.widgets import Checkbox, DataTable, Input, Select, TextArea, TabbedContent
+from textual.widgets import Checkbox, DataTable, Input, Select, SelectionList, TextArea, TabbedContent
 
-from fnv_relay import presets
+from fnv_relay import presets, preferences
 from fnv_relay.store import Store
 from fnv_relay.tui import RelayApp
 
@@ -314,20 +314,20 @@ def test_bucket_order_controls_are_independent_and_new_lane_can_choose_bucket(tm
         store=make_store(tmp_path);worker=FakeWorker();worker.active=True;app=RelayApp(store,lambda _:None,worker=worker)
         async with app.run_test(size=(170,60)) as pilot:
             await pilot.press('f2');await pilot.pause()
-            assert app.query_one('#band',Select).value=='any'
-            app.query_one('#band',Select).value='512-1K'
+            assert set(app.query_one('#band',SelectionList).selected)==set(value for _,value in preferences.BUCKETS[1:])
+            app.query_one('#band',SelectionList).deselect_all();app.query_one('#band',SelectionList).select('512-1K')
             app.query_one('#order',Select).value='largest'
             calls=[];app.launch_command=calls.append
             app.query_one('#apply-policy').scroll_visible();await pilot.pause()
             await pilot.click('#apply-policy');await pilot.pause()
-            assert calls[0][calls[0].index('--band')+1]=='512-1K'
+            assert calls[0][calls[0].index('--bands')+1]=='512-1K'
             assert calls[0][calls[0].index('--order')+1]=='largest'
             await pilot.press('f1');await pilot.pause()
             await pilot.click('#add');await pilot.pause()
-            app.screen.query_one('#new-band',Select).value='4K+'
+            app.screen.query_one('#new-band',SelectionList).deselect_all();app.screen.query_one('#new-band',SelectionList).select('4K+')
             app.screen.query_one('#create').scroll_visible();await pilot.pause()
             await pilot.click('#create');await pilot.pause()
-            assert calls[-1][calls[-1].index('--band')+1]=='4K+'
+            assert calls[-1][calls[-1].index('--bands')+1]=='4K+'
             assert worker.active and worker.calls==[]
         store.close()
     asyncio.run(check())
@@ -350,7 +350,7 @@ def test_running_lane_settings_keep_typed_draft_across_table_rebuild_and_apply(t
             await pilot.click('#max-attempts')
             await pilot.press('end','backspace','1','2')
             app.query_one('#order',Select).value='smallest'
-            app.query_one('#band',Select).value='256-511'
+            app.query_one('#band',SelectionList).deselect_all();app.query_one('#band',SelectionList).select('256-511')
             app.query_one('#allow-attempted',Checkbox).value=False
             # Rebuilding live columns previously reloaded saved values for the same lane.
             app.settings['size']=False
@@ -358,7 +358,7 @@ def test_running_lane_settings_keep_typed_draft_across_table_rebuild_and_apply(t
             assert app.selected=='route-two'
             assert field.value=='12'
             assert app.query_one('#order',Select).value=='smallest'
-            assert app.query_one('#band',Select).value=='256-511'
+            assert app.query_one('#band',SelectionList).selected==['256-511']
             assert not app.query_one('#allow-attempted',Checkbox).value
             app.refresh_data();await pilot.pause()
             assert field.value=='12'
@@ -373,5 +373,43 @@ def test_running_lane_settings_keep_typed_draft_across_table_rebuild_and_apply(t
             assert app.query_one('#order',Select).value=='random'
             app.query_one('#history-lane',Select).value='route-two';await pilot.pause()
             assert field.value=='7'
+        store.close()
+    asyncio.run(check())
+
+
+def test_multi_bucket_ui_preserves_draft_and_rejects_empty_selection(tmp_path):
+    async def check():
+        store=make_store(tmp_path)
+        saved=store.lane('route-one');saved['policy']['band']='256-511';store.put_lane(saved)
+        worker=FakeWorker();worker.active=True
+        app=RelayApp(store,lambda _:None,worker=worker)
+        async with app.run_test(size=(170,60)) as pilot:
+            await pilot.press('f2');await pilot.pause()
+            buckets=app.query_one('#band',SelectionList)
+            assert buckets.selected==['256-511']
+            buckets.select('4K+')
+            app.settings['size']=False;app.refresh_data();await pilot.pause()
+            assert set(buckets.selected)=={'256-511','4K+'}
+            calls=[];app.launch_command=calls.append
+            app.query_one('#apply-policy').scroll_visible();await pilot.pause()
+            await pilot.click('#apply-policy');await pilot.pause()
+            assert set(calls[0][calls[0].index('--bands')+1:])=={'256-511','4K+'}
+            buckets.deselect_all()
+            await pilot.click('#apply-policy');await pilot.pause()
+            assert len(calls)==1
+            assert store.lane('route-one')['policy']['band']=='256-511'
+            await pilot.press('f1');await pilot.pause();await pilot.click('#add');await pilot.pause()
+            choices=app.screen.query_one('#new-band',SelectionList)
+            choices.deselect_all()
+            app.screen.query_one('#create').scroll_visible();await pilot.pause()
+            await pilot.click('#create');await pilot.pause()
+            assert app.screen.query_one('#new-band',SelectionList) is choices
+            assert len(calls)==1
+            choices.select('<=255');choices.select('512-1K')
+            # Textual ignores clicks while the prior press animation is active.
+            await pilot.pause(0.25)
+            await pilot.click('#create');await pilot.pause()
+            assert set(calls[-1][calls[-1].index('--bands')+1:])=={'<=255','512-1K'}
+            assert worker.active and worker.calls==[]
         store.close()
     asyncio.run(check())
