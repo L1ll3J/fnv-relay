@@ -386,3 +386,99 @@ def test_incomplete_lane_prompt_is_clear_without_partial_starter(tmp_path,capsys
     assert call(tmp_path,'lane','prompt','unfinished')==0
     text=capsys.readouterr().out
     assert 'incomplete' in text and 'Welcome courier' not in text
+
+
+def uncertain_upload(store, *, released=True, expires='2000-01-01T00:00:00Z'):
+    from fnv_relay.engine import canonical, sha
+    from fnv_relay.store import write_json
+    route, claim_id = 'upload-route', 'clm_old'
+    store.put_lane({'route_token':route, 'state':'resume_pending', 'policy':{}})
+    claim_root=store.root/'claims'/claim_id
+    claim_root.mkdir(parents=True)
+    write_json(claim_root/'claim.json', {'claim_id':claim_id,'expires':expires})
+    write_json(claim_root/'giveup-response.json', {'released':released})
+    (claim_root/'stdout.log').write_text('retained evidence')
+    args={'kind':'CONTEXT','claim_id':claim_id,'source_utf8':'retained evidence'}
+    key='file:'+route+':'+claim_id+':'+sha(canonical(args))
+    with pytest.raises(RuntimeError):
+        store.operation(key,args,Mock(side_effect=RuntimeError('ambiguous write')))
+    return key,args,claim_root
+
+
+@pytest.mark.parametrize('released,expires',[(True,'2999-01-01T00:00:00Z'),(False,'2000-01-01T00:00:00Z')])
+def test_archive_upload_preserves_uncertain_journal_artifacts_and_prevents_retry(tmp_path,monkeypatch,released,expires):
+    store=Store(tmp_path)
+    key,args,root=uncertain_upload(store,released=released,expires=expires)
+    before=store.operation_record(key);lane=store.lane('upload-route')
+    project=Mock();project.call.return_value={'open_claims':[]}
+    monkeypatch.setattr(cli,'FNV',Mock(return_value=project))
+    monkeypatch.setattr(cli,'account_lock',lambda key:nullcontext())
+    cli.archive_upload(store,key)
+    assert store.pending_operations()==[]
+    assert store.operation_record(key)==before
+    assert store.lane('upload-route')==lane
+    assert (root/'stdout.log').read_text()=='retained evidence'
+    receipt=store.get('upload-archive:'+key)
+    assert receipt['original_operation']==before
+    assert receipt['resolution']=='closed_claim_upload_archived_unresolved'
+    resend=Mock()
+    with pytest.raises(cli.UncertainOperation):store.operation(key,args,resend)
+    resend.assert_not_called()
+    project.call.assert_called_once_with('status',{})
+    # A receipt is bound to both arguments and original state; it is never success.
+    receipt['args_hash']='f'*64;store.set('upload-archive:'+key,receipt)
+    assert len(store.pending_operations())==1
+    receipt['args_hash']=before['args_hash'];receipt['resolution']='successful'
+    store.set('upload-archive:'+key,receipt)
+    assert len(store.pending_operations())==1
+    receipt['resolution']='closed_claim_upload_archived_unresolved'
+    receipt['original_operation']={**before,'key':'file:another-operation'}
+    store.set('upload-archive:'+key,receipt)
+    assert len(store.pending_operations())==1
+    store.close()
+
+
+@pytest.mark.parametrize('owned_status',[{'open_claims':[{'this_key':True}]},{'open_claims':[{}]},{}])
+def test_archive_upload_rejects_owned_or_unconfirmed_official_claims(tmp_path,monkeypatch,owned_status):
+    store=Store(tmp_path);key,_,_=uncertain_upload(store)
+    before=store.operation_record(key)
+    project=Mock();project.call.return_value=owned_status
+    monkeypatch.setattr(cli,'FNV',Mock(return_value=project))
+    monkeypatch.setattr(cli,'account_lock',lambda key:nullcontext())
+    with pytest.raises((ValueError,cli.UncertainOperation)):cli.archive_upload(store,key)
+    assert len(store.pending_operations())==1
+    assert store.operation_record(key)==before
+    assert store.get('upload-archive:'+key) is None
+    store.close()
+
+
+@pytest.mark.parametrize('blocker',['live_claim','tracked_lease','bad_identity','running_worker','wrong_hash','non_file'])
+def test_archive_upload_rejects_unsafe_local_scope(tmp_path,monkeypatch,blocker):
+    from fnv_relay.store import write_json
+    store=Store(tmp_path);key,_,root=uncertain_upload(store,released=False,expires='2999-01-01T00:00:00Z' if blocker=='live_claim' else '2000-01-01T00:00:00Z')
+    before=store.operation_record(key)
+    project=Mock();project.call.return_value={'open_claims':[]}
+    monkeypatch.setattr(cli,'FNV',Mock(return_value=project))
+    monkeypatch.setattr(cli,'account_lock',lambda key:nullcontext())
+    if blocker=='tracked_lease':store.put_lane({'route_token':'other','lease':{'claim_id':'clm_other'}})
+    if blocker=='bad_identity':write_json(root/'claim.json',{'claim_id':'clm_different','expires':'2000-01-01T00:00:00Z'})
+    if blocker=='wrong_hash':store.db.execute('UPDATE operations SET args_hash=? WHERE key=?',('f'*64,key));before=store.operation_record(key)
+    target='giveup:upload-route:clm_old' if blocker=='non_file' else key
+    with store.lock('serve') if blocker=='running_worker' else nullcontext():
+        with pytest.raises((ValueError,cli.AlreadyRunning)):cli.archive_upload(store,target)
+    assert store.get('upload-archive:'+key) is None
+    assert store.operation_record(key)==before
+    project.call.assert_not_called()
+    store.close()
+
+
+def test_reconcile_archive_parser_and_unrelated_pending_operations(tmp_path,monkeypatch):
+    store=Store(tmp_path);key,_,_=uncertain_upload(store)
+    with pytest.raises(RuntimeError):store.operation('giveup:other',{},Mock(side_effect=RuntimeError()))
+    monkeypatch.setattr(cli,'FNV',Mock(return_value=Mock(call=Mock(return_value={'open_claims':[]}))))
+    monkeypatch.setattr(cli,'account_lock',lambda key:nullcontext())
+    args=cli.parser().parse_args(['reconcile','--archive-upload',key])
+    cli.run(args,store)
+    assert [x['key'] for x in store.pending_operations()]==['giveup:other']
+    with pytest.raises(SystemExit):cli.parser().parse_args(['reconcile','--archive-upload',key,'--claim','upload-route'])
+    store.close()

@@ -20,11 +20,11 @@ import signal
 import threading
 
 from . import __version__, authentication, compiler, connections, preferences, presentation, setup, tools
-from .engine import BANDS, Engine
+from .engine import BANDS, Engine, check_id, epoch
 from .notion import Notion, NotionError, page_id
 from .notion_oauth import OAuthError
 from .project import FNV, ProjectError
-from .store import AlreadyRunning, Store, UncertainOperation, OperationNotStarted
+from .store import AlreadyRunning, Store, UncertainOperation, OperationNotStarted, read_json
 from .lifecycle import process_identity, owner_alive
 
 DEFAULT_STATE = "~/.local/share/fnv-relay"
@@ -104,7 +104,9 @@ def parser():
     stop.add_argument("--timeout", type=float, default=15, help="Wait at most this many seconds for a running worker (0–120)")
     commands.add_parser("drain", help="Finish current claims without assigning more")
     reconcile = commands.add_parser("reconcile", help="Inspect uncertain writes; optionally verify a claim is no longer active")
-    reconcile.add_argument("--claim", metavar="ROUTE", help="Verify no claims belong to this key; preserve the intent and rearm this lane locally")
+    review = reconcile.add_mutually_exclusive_group()
+    review.add_argument("--claim", metavar="ROUTE", help="Verify no claims belong to this key; preserve the intent and rearm this lane locally")
+    review.add_argument("--archive-upload", metavar="OPERATION", help="Explicitly archive an uncertain upload from a closed claim as unresolved history; never retries or marks it successful")
     return root
 
 
@@ -392,6 +394,43 @@ def reconcile_claim(store, route):
         print("No active claim belongs to this key. Original intent retained; unfinished work is ready to resume on start.")
 
 
+def archive_upload(store, key):
+    """Owner-reviewed disposition of an obsolete upload, retaining its uncertain intent."""
+    parts = key.split(':')
+    if len(parts) != 4 or parts[0] != 'file' or not re.fullmatch(r'[0-9a-f]{64}', parts[3]):
+        raise ValueError("Only a source-bound file upload can be archived")
+    _, route, claim_id, digest = parts
+    check_id(claim_id)
+    with store.lock("serve"), account_lock(store.secrets().get("fnv_api_key", "")):
+        record = store.operation_record(key)
+        if not record or record['status'] != 'uncertain' or record['args_hash'] != digest:
+            raise ValueError("Upload is not an uncertain operation with matching arguments")
+        if not store.lane(route) or any(lane.get('lease') for lane in store.lanes()):
+            raise ValueError("Stop and release tracked work before archiving an upload")
+        claim_root = store.root / 'claims' / claim_id
+        claim = read_json(claim_root / 'claim.json', {})
+        released = read_json(claim_root / 'giveup-response.json', {})
+        if claim.get('claim_id') != claim_id:
+            raise ValueError("Retained claim identity was not confirmed")
+        expires = claim.get('expires')
+        if released.get('released') is not True and (not isinstance(expires, str) or epoch(expires) > time.time()):
+            raise ValueError("Claim is neither released nor expired")
+        status = FNV(store.secrets().get("fnv_api_key", "")).call("status", {})
+        claims = status.get('open_claims')
+        if not isinstance(claims, list) or any(not isinstance(row, dict) or type(row.get('this_key')) is not bool for row in claims):
+            raise ValueError("Official ownership status was not confirmed")
+        if any(row['this_key'] for row in claims):
+            raise UncertainOperation("This key still owns a claim; stop it before reconciliation")
+        receipt = {'args_hash': digest, 'original_status': record['status'],
+                   'resolution': 'closed_claim_upload_archived_unresolved',
+                   'route_token': route, 'claim_id': claim_id, 'observed_at': time.time(),
+                   'closure': 'released' if released.get('released') is True else 'expired',
+                   'official_owned_claims': 0, 'original_operation': record}
+        store.set('upload-archive:'+key, receipt)
+        store.event('upload_archived_unresolved', {'route_token': route, 'claim_id': claim_id,
+                    'operation': key, 'resolution': receipt['resolution']})
+        print("Closed-claim upload archived as unresolved history. Original journal and artifacts retained; no upload was retried or marked successful.")
+
 
 def stop_unstarted_worker(store, project):
     engine = Engine(store,project,None,watchdog=False)
@@ -554,8 +593,10 @@ def run(args, store):
     elif args.command == "reconcile":
         if args.claim:
             reconcile_claim(store, args.claim)
+        elif args.archive_upload:
+            archive_upload(store, args.archive_upload)
         else:
-            output({"uncertain_operations": store.pending_operations(), "action": "Use reconcile --claim ROUTE to verify ownership of an uncertain claim request. Other uncertain writes require review."})
+            output({"uncertain_operations": store.pending_operations(), "action": "Use reconcile --claim ROUTE for uncertain claims. After review, --archive-upload OPERATION retains a closed-claim upload as unresolved history without retrying it."})
     elif args.command == "logs":
         events = store.events(args.tail)
         for event in events:

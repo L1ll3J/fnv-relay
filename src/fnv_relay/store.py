@@ -162,6 +162,12 @@ class Store:
                 continue
             if key.startswith(('create:','landing:')) and (self.get('lane-setup-resolution:'+key) or {}).get('args_hash') == digest:
                 continue
+            archived = self.get('upload-archive:'+key) if key.startswith('file:') else None
+            if (row[2] == 'uncertain' and isinstance(archived, dict) and archived.get('args_hash') == digest
+                    and archived.get('resolution') == 'closed_claim_upload_archived_unresolved'
+                    and archived.get('original_status') == row[2]
+                    and archived.get('original_operation') == self.operation_record(key)):
+                continue
             pending.append(dict(zip(('key','args_hash','status','created','updated'), row)))
         return pending
 
