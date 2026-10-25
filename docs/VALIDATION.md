@@ -10,10 +10,11 @@ Validated on Ubuntu/Linux under WSL2 on 2026-10-24:
 - Bootstrap extraction from a retained Microsoft ISO: all 2,705 extracted files matched the working compiler tree. System apt installation and a completely fresh end-to-end bootstrap were not run.
 - Original target bytes and checker-rendered disassembly exported successfully from the same retained pack.
 
-The new standalone Notion internal-token client has mocked transport tests. It has not been tested through a live newcomer account from initial login to a real server-verified contribution. Existing live private Pro lanes use a separate transport; their operation does not establish that this new package's complete live loop has passed. Treat this as a preview and start with one small lane.
+The standalone Notion browser-OAuth transport and advanced internal-token fallback remain preview paths. Offline transport tests do not establish a live newcomer run from browser authorization to a real server-verified contribution. In particular, do not treat the new browser flow as fully live validated until its actual account/workspace authorization and page read/write checks have passed. Existing live private Pro lanes use a separate transport; their operation does not establish that this new package's complete live loop has passed. Treat this as a preview and start with one small lane.
 
 Current boundaries:
 
+- ChatGPT Notion authorization is a manual prerequisite: Settings → Integrations → Plugins → Browse directory → Notion → connect, then (in ChatGPT, not Notion) Settings → Integrations → Plugins → Notion → Allow all tools. No action in Notion is needed before CLI setup. The setup acknowledgement is not an access test; confirm actual read/write/readback before claiming. CLI OAuth is a separate grant.
 - Linux/WSL2 only; no native Windows support claim.
 - Compiler checks run sequentially. Each claim has an independent ordinary-code expiry guardian.
 - Selection orders available size bands; it does not have a global ranking of every open function. A size-filter miss releases the claim and pauses admissions for that unchanged lane policy rather than repeatedly claiming unsuitable functions.
@@ -25,3 +26,13 @@ Current boundaries:
 No game/compiler binaries, original project sources, candidate examples, private state, credentials, or live Notion links are included in the release. Test sources and services are synthetic.
 
 Run the offline checks with `python -m pip install '.[test]'` followed by `python -m pytest -q`. These tests make no model API requests.
+
+## 0.2 lifecycle update
+
+The expanded offline suite passes 157 tests. It covers safe release and same-address continuation with fresh context, definitive cooldowns versus uncertain writes, owner-process death/PID reuse, stale watcher snapshots, pause/resume, shutdown summaries and model attribution. Real subprocess tests deliver SIGINT, SIGTERM and SIGHUP to a synthetic controller and verify tracked-claim cleanup. A separate cancellation test verifies the owned child process group is terminated and reaped. These tests use synthetic services and make no model or project API calls.
+
+`stop` now releases tracked claims rather than only draining. Use `drain` to finish existing tasks. Human-readable `status` is the default; scripts should use `status --json`. Same-function continuation does not renew a lease: it releases, respects project availability/cooldowns, then obtains a fresh assignment. Following accepted submission, one next-task admission is permitted without waiting for verification; no receipt is called a verified contribution.
+
+Catchable exits perform cleanup; an independent guardian can release after abrupt controller death while the computer stays online. Power loss or unavailable project networking can prevent release. Pending/uncertain operations are explicitly retained and never reported as successfully released. Best sources larger than the relay's conservative 64 KiB near-miss upload ceiling remain local rather than being discarded or truncated.
+
+The owner completed the public CLI browser authorization successfully during the newcomer trial on 2026-10-24, including private parent/lane creation and local readback. This validates that connection path on that account and WSL2 host; it does not yet prove a complete Free ChatGPT solve or server-verified submission.

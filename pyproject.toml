@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fnv-relay"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local, model-free Notion relay for owner-operated FNV decompilation"
 requires-python = ">=3.11.8"
 license = "MIT"
-dependencies = []
+dependencies = ["mcp==2.3.0", "textual==8.2.8"]
 
 [project.optional-dependencies]
 test = ["pytest>=8"]

@@ -15,3 +15,5 @@ secrets.json
 *.pdb
 *.cab
 *.msi
+
+.relay-launcher.json

@@ -119,8 +119,24 @@ def _run(argv: list[str], env: dict, timeout: float, cwd: Path) -> tuple[int, by
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
-            os.killpg(proc.pid, signal.SIGKILL)
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             proc.wait()
+        except BaseException:
+            # The compiler is our child process group; never leave it orphaned
+            # when cancellation interrupts the wait. Retain available diagnostics.
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait()
+            output.seek(0)
+            errors.seek(0)
+            (cwd / "interrupted.stdout.log").write_bytes(output.read())
+            (cwd / "interrupted.stderr.log").write_bytes(errors.read())
+            raise
         output.seek(0)
         errors.seek(0)
         return proc.returncode, output.read(), errors.read(), timed_out
@@ -169,6 +185,7 @@ def _versions(cfg: dict) -> dict:
     result = {"controller_python": sys.version.split()[0], "platform": platform.platform(),
               "backend_sha256": _sha(Path(__file__)),
               "checker_python_sha256": _sha(Path(cfg["python"]).resolve())}
+    result["evidence_backend_sha256"] = _sha(Path(__file__).with_name("candidate_evidence.py"))
     for tool in ("wine", "wineserver", "wineboot", "unshare"):
         path = shutil.which(tool, path="/usr/bin:/bin")
         result[tool + "_sha256"] = _sha(Path(path).resolve()) if path else None
@@ -260,6 +277,13 @@ def check(config: dict, pack_dir: Path, candidate: Path, work: Path, *, plain: b
               "checker": checker, "versions": versions, "timed_out": timed_out}
     if result["status"] == "match" and not match:
         result["status"] = "infrastructure_error"
+    if not plain:
+        from .candidate_evidence import collect
+        result['diagnostics'], result['diagnostic_artifacts'] = collect(work, source_hash)
+        if not unchanged or not sandbox_ready or timed_out:
+            result['diagnostics'] = {'status': 'unavailable', 'reason_code': 'check_integrity_unproven',
+                                     'additional_compiler_invocations': 0}
+            result['diagnostic_artifacts'] = []
     image_log = work / "cache/image-check.stdout.log"
     if image_log.is_file():
         result["image_log_path"] = str(image_log)
@@ -311,6 +335,13 @@ def _landlock(read_paths: list[Path], write_paths: list[Path], directory_paths: 
 def _child(payload: Path) -> None:
     data = json.loads(payload.read_text())
     cfg, work = data["config"], Path(data["work"])
+    # Load trusted observer code before restricting filesystem access. It only
+    # observes the diagnostic run; the independent plain invocation stays execve.
+    import importlib.util
+    evidence_spec = importlib.util.spec_from_file_location('relay_candidate_evidence', Path(__file__).with_name('candidate_evidence.py'))
+    evidence = importlib.util.module_from_spec(evidence_spec)
+    evidence_spec.loader.exec_module(evidence)
+
     # Check namespaces rather than trusting invocation flags or a marker alone.
     for name in ("user", "net", "pid"):
         if os.readlink(f"/proc/self/ns/{name}") == data["parent_namespaces"][name]:
@@ -350,6 +381,8 @@ def _child(payload: Path) -> None:
             "--pack", str(work / "pack"), str(work / "candidate.cpp")]
     if not data["plain"]:
         argv.append("--json")
+        evidence.run(cfg['checker_dir'], work, argv[3:])
+        return
     os.execve(cfg["python"], argv, _env(cfg, work))
 
 

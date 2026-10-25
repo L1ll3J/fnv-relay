@@ -3,7 +3,7 @@ import io
 import json
 from pathlib import Path
 import tarfile
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 import pytest
 
@@ -35,6 +35,7 @@ def test_device_flow_polls_at_interval_and_stores_without_exposing_secrets(tmp_p
     responses = [initial(), URLError("secret-device-123456"), {"status": "pending"}, {"status": "approved", "api_key": "secret-api-key-123456"}]
 
     def opener(request, timeout):
+        assert request.get_header("User-agent") == "fnv-relay/" + cli.__version__
         requests.append((request.full_url, json.loads(request.data), timeout))
         result = responses.pop(0)
         if isinstance(result, Exception):
@@ -152,5 +153,20 @@ def test_tools_fetch_refuses_existing_files_and_active_owner_claims(tmp_path):
         with pytest.raises(ValueError):
             tools.fetch(store, tmp_path / "local-refused", project=project)
         assert project.downloads == []
+    finally:
+        store.close()
+
+
+def test_connect_http_failure_exposes_status_without_response_body(tmp_path):
+    store = Store(tmp_path)
+    calls = []
+    def denied(request, timeout):
+        calls.append(request)
+        raise HTTPError(request.full_url, 403, "secret-remote-message", {}, io.BytesIO(b"secret-body"))
+    try:
+        with pytest.raises(authentication.ConnectionError, match="HTTP 403") as caught:
+            authentication.connect(store, opener=denied)
+        assert "secret" not in str(caught.value)
+        assert len(calls) == 1
     finally:
         store.close()

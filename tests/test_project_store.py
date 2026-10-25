@@ -9,7 +9,7 @@ from urllib.request import Request
 
 import pytest
 
-from fnv_relay.project import FNV, ProjectError, _SameOrigin
+from fnv_relay.project import FNV, ProjectError, USER_AGENT, _SameOrigin
 from fnv_relay.store import AlreadyRunning, Store, UncertainOperation, read_json, write_json
 
 
@@ -30,6 +30,7 @@ class Server:
         self.sleeps = []
 
     def __call__(self, request, timeout):
+        assert request.get_header("User-agent") == USER_AGENT
         self.calls.append(request)
         result = self.results.pop(0)
         if isinstance(result, Exception):
@@ -234,3 +235,66 @@ def test_nonblocking_process_lock(tmp_path):
             pass
     one.close()
     two.close()
+
+
+def test_event_log_is_bounded_and_chronological(tmp_path):
+    from fnv_relay.store import Store
+    store = Store(tmp_path/'events')
+    for i in range(5):
+        store.event('fixture', {'value':i})
+    assert [row['data']['value'] for row in store.events(2)] == [3,4]
+    with pytest.raises(ValueError):
+        store.events(201)
+    store.close()
+
+
+def test_long_retry_after_is_returned_without_sleep_or_early_retry():
+    server=Server(error(429,headers={'Retry-After':'3600'}))
+    with pytest.raises(ProjectError) as caught:server.client().call('status',{})
+    assert caught.value.retry_after==3600 and not caught.value.uncertain
+    assert len(server.calls)==1 and server.sleeps==[]
+
+
+def test_shutdown_cancels_read_backoff_and_can_be_disabled_for_cleanup():
+    event=threading.Event()
+    server=Server(error(503),{'open_claims':[]})
+    client=server.client()
+    class StopDuringWait:
+        def wait(self,delay):
+            if delay: event.set()
+            return event.is_set()
+    client.set_stop_event(StopDuringWait())
+    with pytest.raises(ProjectError) as caught:client.call('status',{})
+    assert caught.value.code=='cancelled' and len(server.calls)==1
+    client.set_stop_event(None)
+    assert client.call('status',{})=={'open_claims':[]}
+
+
+
+def test_definitely_unsent_operation_preserves_binding_and_can_retry(tmp_path):
+    from fnv_relay.store import OperationNotStarted
+    store=Store(tmp_path)
+    with pytest.raises(OperationNotStarted):
+        store.operation('create:lane:inbox',{'title':'same'},lambda:(_ for _ in ()).throw(OperationNotStarted('busy')))
+    assert store.operation_record('create:lane:inbox')['status']=='not_sent'
+    assert store.pending_operations()==[]
+    with pytest.raises(ValueError):store.operation('create:lane:inbox',{'title':'changed'},lambda:'wrong')
+    assert store.operation('create:lane:inbox',{'title':'same'},lambda:'confirmed')=='confirmed'
+    store.close()
+
+
+def test_lock_can_wait_for_other_holder_and_timeout_is_bounded(tmp_path):
+    import fcntl,time
+    store=Store(tmp_path)
+    with store.lock('session'):
+        with pytest.raises(AlreadyRunning):
+            with store.lock('session',timeout=.02):pass
+    with store.lock('session',timeout=.02):pass
+    store.close()
+
+
+def test_new_function_listing_is_read_only_and_retries_transient_transport_failure():
+    server=Server(error(503),{'order':'size','functions':[],'next':None})
+    assert server.client().call('list_functions',{'limit':500})['functions']==[]
+    assert len(server.calls)==2
+    assert server.sleeps==[1]

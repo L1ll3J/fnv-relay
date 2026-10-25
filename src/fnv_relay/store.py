@@ -56,6 +56,11 @@ class AlreadyRunning(RuntimeError):
     pass
 
 
+class OperationNotStarted(RuntimeError):
+    """A local prerequisite failed before an external operation was sent."""
+
+
+
 class Store:
     def __init__(self, root):
         self.root = Path(root).expanduser().resolve()
@@ -127,6 +132,19 @@ class Store:
     def event(self, kind, data):
         self.db.execute("INSERT INTO events(created,kind,data) VALUES (?,?,?)", (time.time(), kind, _json(data)))
 
+    def events(self, limit=20):
+        """Recent local events; callers choose which fields to display publicly."""
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("Event limit must be 1..200")
+        rows = self.db.execute("SELECT id,created,kind,data FROM events ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [{"id":row[0], "created":row[1], "kind":row[2], "data":json.loads(row[3])} for row in reversed(rows)]
+
+    def events_after(self, cursor, limit=200):
+        if type(cursor) is not int or cursor < 0 or type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError('Invalid event cursor or limit')
+        rows=self.db.execute('SELECT id,created,kind,data FROM events WHERE id>? ORDER BY id LIMIT ?', (cursor,limit)).fetchall()
+        return [{'id':row[0],'created':row[1],'kind':row[2],'data':json.loads(row[3])} for row in rows]
+
     def operation_record(self, key):
         row = self.db.execute("SELECT key,args_hash,status,result,created,updated FROM operations WHERE key=?", (key,)).fetchone()
         if not row:
@@ -137,7 +155,21 @@ class Store:
         return record
 
     def pending_operations(self):
-        return [{"key": row[0], "args_hash": row[1], "status": row[2], "created": row[3], "updated": row[4]} for row in self.db.execute("SELECT key,args_hash,status,created,updated FROM operations WHERE status!='response' ORDER BY created")]
+        pending = []
+        for row in self.db.execute("SELECT key,args_hash,status,created,updated FROM operations WHERE status NOT IN ('response','not_sent') ORDER BY created"):
+            key, digest = row[:2]
+            if key.startswith('claim:') and (self.get('claim-resolution:'+key) or {}).get('args_hash') == digest:
+                continue
+            if key.startswith(('create:','landing:')) and (self.get('lane-setup-resolution:'+key) or {}).get('args_hash') == digest:
+                continue
+            archived = self.get('upload-archive:'+key) if key.startswith('file:') else None
+            if (row[2] == 'uncertain' and isinstance(archived, dict) and archived.get('args_hash') == digest
+                    and archived.get('resolution') == 'closed_claim_upload_archived_unresolved'
+                    and archived.get('original_status') == row[2]
+                    and archived.get('original_operation') == self.operation_record(key)):
+                continue
+            pending.append(dict(zip(('key','args_hash','status','created','updated'), row)))
+        return pending
 
     def operation(self, key, args, fn):
         args_hash = hashlib.sha256(_json(args).encode("utf-8")).hexdigest()
@@ -150,9 +182,13 @@ class Store:
                 if existing["status"] == "response":
                     self.db.execute("COMMIT")
                     return existing["result"]
-                raise UncertainOperation(f"Operation {key!r} requires reconciliation")
+                if existing['status'] != 'not_sent':
+                    raise UncertainOperation(f"Operation {key!r} requires reconciliation")
             now = time.time()
-            self.db.execute("INSERT INTO operations VALUES (?,?, 'intent', NULL,?,?)", (key, args_hash, now, now))
+            if existing:
+                self.db.execute("UPDATE operations SET status='intent',updated=? WHERE key=?", (now,key))
+            else:
+                self.db.execute("INSERT INTO operations VALUES (?,?, 'intent', NULL,?,?)", (key, args_hash, now, now))
             # FULL synchronous commit durably writes intent before the network request.
             self.db.execute("COMMIT")
         except BaseException:
@@ -164,20 +200,29 @@ class Store:
             encoded = _json(result)
             self.db.execute("UPDATE operations SET status='response',result=?,updated=? WHERE key=?", (encoded, time.time(), key))
             return result
+        except OperationNotStarted:
+            self.db.execute("UPDATE operations SET status='not_sent',updated=? WHERE key=?", (time.time(), key))
+            raise
         except BaseException:
             self.db.execute("UPDATE operations SET status='uncertain',updated=? WHERE key=?", (time.time(), key))
             raise
 
     @contextmanager
-    def lock(self, name):
+    def lock(self, name, *, timeout=0):
         if not isinstance(name, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", name):
             raise ValueError("Invalid lock name")
         fd = os.open(self._locks / (name + ".lock"), os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                raise AlreadyRunning(f"Another relay process holds {name!r}") from None
+            deadline = time.monotonic() + timeout
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise AlreadyRunning(f"Another relay process holds {name!r}") from None
+                    time.sleep(min(0.05, remaining))
             try:
                 yield
             finally:

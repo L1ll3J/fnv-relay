@@ -141,6 +141,16 @@ python3 -m venv "$TOOLS_DIR/venv"
 PYTHON="$TOOLS_DIR/venv/bin/python"
 "$PYTHON" -m pip install "$REPO_DIR" capstone
 RELAY=("$TOOLS_DIR/venv/bin/fnv-relay" --state-dir "$STATE_DIR")
+"$PYTHON" - "$REPO_DIR" "$TOOLS_DIR/venv/bin/fnv-relay" "$STATE_DIR" <<'LAUNCHER'
+import json,os,sys
+from pathlib import Path
+repo,executable,state=map(Path,sys.argv[1:])
+path=repo/'.relay-launcher.json'
+if path.is_symlink(): raise SystemExit('Refusing a symlink for local launcher settings')
+path.write_text(json.dumps({'executable':str(executable.absolute()),'state_dir':str(state.absolute())}))
+path.chmod(0o600)
+print('Launch the interactive menu from this checkout with ./relay')
+LAUNCHER
 "${RELAY[@]}" init
 "${RELAY[@]}" config --game-exe "$GAME" --compiler-dir "$TOOLS_DIR/msvc9" --python "$PYTHON" --wine-prefix "$TOOLS_DIR/wine-prefix"
 if ((NO_CONNECT)); then
@@ -176,5 +186,5 @@ manifest['game_image_verified']=True
 (root/'install-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 PY
 printf '\nInstallation complete. CLI: %s/venv/bin/fnv-relay\n' "$TOOLS_DIR"
-printf 'Next: authorize a Notion internal connection, share its parent page, then run:\n  %q --state-dir %q auth notion login\n  %q --state-dir %q doctor\n' "$TOOLS_DIR/venv/bin/fnv-relay" "$STATE_DIR" "$TOOLS_DIR/venv/bin/fnv-relay" "$STATE_DIR"
+printf 'Next: connect Notion in your browser and create your relay page:\n  %q --state-dir %q setup\n  %q --state-dir %q doctor\n' "$TOOLS_DIR/venv/bin/fnv-relay" "$STATE_DIR" "$TOOLS_DIR/venv/bin/fnv-relay" "$STATE_DIR"
 printf 'ChatGPT must separately connect to Notion and authorize those pages. See docs/BOOTSTRAP.md.\n'

@@ -1,6 +1,30 @@
 # Setup
 
-This is a 0.1 preview for Ubuntu/Linux, including Ubuntu under WSL2. Python 3.11.8+ is required. Native Windows has not been verified. Run commands from your extracted package or checkout; no public hosting URL is assumed.
+This is a 0.2 preview for Ubuntu/Linux, including Ubuntu under WSL2. Python 3.11.8+ is required. Native Windows has not been verified. Run commands from your extracted package or checkout; no public hosting URL is assumed.
+
+Run **`./relay`** after bootstrap to open the full-screen Courier console. **Overview** updates lane tables in place; **Lane controls** changes task selection, pauses work and resumes preserved functions; **History** shows score changes; **Activity** shows recorded data flow and errors; **Prompt notepad** stores editable copy-only prompts; **Settings** toggles metrics and opens account setup. Use the mouse, Tab, or F1–F6 to navigate. **Ctrl+Q** stops safely and exits. Keep the app open while solving; adding lanes and copying starters uses the same screen while the managed worker runs. Interrupted lane setup is recovered through Add lane. `fnv-relay text-menu` retains the numbered interface, and explicit `start`, `stop` and `status --json` commands remain available for scripts.
+
+## First connect Notion inside ChatGPT
+
+In ChatGPT, open **Settings → Integrations → Plugins → Browse directory**, search for **Notion**, sign in or sign up, and connect it. No action in Notion is needed yet. Then, in ChatGPT (not Notion), open **Settings → Integrations → Plugins → Notion → Allow all tools**. Use the Notion account/workspace you will use for the relay. These are manual ChatGPT steps; the CLI cannot perform or authorize them for you.
+
+## Guided account setup after bootstrap
+
+With the game/compiler/checker installed using [Ubuntu/WSL2 bootstrap](BOOTSTRAP.md), run the installed CLI from an interactive terminal:
+
+```sh
+fnv-relay setup
+fnv-relay doctor
+fnv-relay start
+```
+
+If the CLI is not on your PATH, use `~/.local/share/fnv-relay-tools/venv/bin/fnv-relay`. For a custom state directory, place `--state-dir /your/state` before each command.
+
+`setup` reuses existing credentials. A fresh setup walks you through FNV's GitHub approval and Notion browser authorization, where you choose your own account and workspace. The CLI uses Notion's hosted MCP service; you do not need to create a developer integration for this default flow. With browser authorization and no saved parent, press Enter at the parent-page prompt to create a private **FNV Relay** page in the chosen workspace. You can instead supply an existing private page URL; a previously saved parent can be reused. The wizard verifies that parent and offers to create a first lane and print its ChatGPT starter prompt. The wizard asks you to acknowledge the manual ChatGPT connection before CLI Notion OAuth. That saved acknowledgement records your answer, not a successful capability test. No model API key is needed. Tool installation and the official image/compiler checks remain separate prerequisites.
+
+An existing internal-token setup stays on that transport. Before any lanes have been created, `fnv-relay auth notion connect` can switch it to browser authorization. Once a state has lanes, the CLI refuses to reconnect credentials or silently rebind those lanes: keep their existing transport, or initialize a separate fresh state for the new account/transport. For a newcomer trial with a different Free ChatGPT/Notion account, use a fresh local state and choose that user's own Notion workspace; borrowing old private relay pages is unnecessary.
+
+The detailed manual steps below remain available if you prefer individual commands.
 
 ## 1. Install locally
 
@@ -52,35 +76,54 @@ The configured Python must have the official checker's dependencies installed; t
 
 Compilation also needs Wine and the relay's Linux isolation prerequisites, including user namespaces (`unshare`) and Landlock support. A WSL2 installation is not automatically proof these are enabled. Run `doctor` below and resolve failed checks before serving lanes. Its namespace, Landlock, file, and authentication checks are preliminary: it does not compile a smoke candidate, verify the game image, or prove the compiler version. Use the official checker for those checks. Initialize only a new dedicated Wine prefix with `fnv-relay doctor --prepare-wine`; this explicit option runs Wine initialization and writes to that prefix. Do not bypass isolation to make a failed health check disappear.
 
-## 3. Connect a private Notion parent
+## 3. Connect Notion in your browser
 
-The local relay uses a **Notion internal connection API token**. This is separate from the Notion connection you authorize in ChatGPT; Codex/ChatGPT OAuth credentials are not a replacement.
+The normal setup wizard handles this for you. To connect, or switch a token-based state that has no lanes yet:
 
-1. As a workspace owner, create an internal connection in the [Notion developer portal](https://www.notion.so/profile/integrations). Enable read, insert, and update content capabilities needed for the lane pages.
-2. Create a private parent page in that workspace. In its `•••` menu, choose **Add connections** and select your internal connection. Grant access to this parent rather than unrelated workspace pages.
-3. Retrieve the connection token from its Configuration tab, then enter it at the hidden prompt:
+```sh
+fnv-relay auth notion connect
+fnv-relay setup
+```
+
+Keep the terminal open while your browser opens Notion. Sign in to the intended account, select the intended workspace, review the requested access, and approve. The CLI receives the result through a temporary local loopback callback and stores its credentials in your private state. It connects directly to [Notion's hosted MCP service](https://developers.notion.com/guides/mcp/build-mcp-client), rather than requiring your own public OAuth application.
+
+Notion MCP acts with the signed-in user’s Notion permissions; its authorization is broader than sharing a single page with an internal connection. Review the workspace and consent screen before approving. [Notion permissions guidance](https://www.notion.com/help/notion-mcp)
+
+If the browser does not open automatically, copy the displayed authorization URL into your own browser. On WSL2, that browser must be able to reach the CLI's localhost callback. Leave the CLI running until it confirms completion. If authorization times out or is declined, run `auth notion connect` again. Do not paste credentials or callback URLs into chat, page content, or shell arguments.
+
+The CLI's authorization and ChatGPT's Notion connection are **separate**. Complete the manual ChatGPT connection above first, then authorize the CLI against the same intended Notion workspace. Confirm that the selected conversation can read, write, and read back a harmless marker on the relay pages before claiming work; acknowledging the setup question does not prove this. See [connection checks](SUBSCRIPTIONS.md). Availability depends on the actual account and selected tools; a Free or Pro label alone does not prove access.
+
+### Advanced fallback: internal connection token
+
+Use this only if you prefer the REST/token transport or browser authorization is unavailable under your workspace policy. Configure it before creating lanes, or use a fresh state; existing lanes cannot be silently moved to another credential. This fallback requires an existing private parent page URL rather than automatic workspace-root creation:
+
+1. As a workspace owner, create an internal connection in the [Notion developer portal](https://www.notion.so/profile/integrations). Enable read, insert, and update content.
+2. Create a private parent page. In its `•••` menu, choose **Add connections** and select the connection.
+3. Enter its token at the hidden local prompt, then complete setup with that parent URL:
 
 ```sh
 fnv-relay auth notion login
+fnv-relay setup
 fnv-relay doctor
 ```
 
-Separately authorize your own Notion account in ChatGPT and confirm the web agent can read and edit the parent and its lane pages. Neither credential grants the other client access automatically. See [Notion authorization](https://developers.notion.com/guides/get-started/authorization).
+This token belongs to your own internal connection; ChatGPT/Codex OAuth credentials are not a substitute. See [Notion authorization](https://developers.notion.com/guides/get-started/authorization).
 
-**Check workspace capacity first.** Since September 8, 2026, applicable Notion API writes enforce Free workspace block limits. For internal connections, a Free workspace with more than one member has 1,000 lifetime blocks; deleting blocks does not recover capacity. Single-member Free workspaces and paid workspaces have unlimited blocks under that policy; guests are not members. Notion MCP has separate enforcement. A block-limit failure is not fixed by retrying. Check your actual workspace before assuming a purchase is needed. [Workspace block limits](https://developers.notion.com/reference/workspace-block-limits) and [API request limits](https://developers.notion.com/reference/request-limits) are separate policies.
+**Workspace limits still apply.** Notion's hosted MCP and REST API have separate enforcement policies. In the internal-token fallback, Free workspaces with more than one member can hit the 1,000 lifetime block limit; deleting blocks does not recover that capacity. Single-member Free workspaces have unlimited blocks under that policy. Do not infer MCP limits from REST limits or assume a paid plan is required: check the actual workspace and returned error. See [workspace block limits](https://developers.notion.com/reference/workspace-block-limits) and [request limits](https://developers.notion.com/reference/request-limits).
 
 ## 4. Start one lane
 
-Creating a lane writes to the Notion parent you supply. Starting the relay enables live project activity under your FNV credentials, including claims and submissions. Start with one lane so you can inspect the workflow.
+Creating a lane writes to the Notion parent you supply, or the parent previously verified by `setup` when `--parent-page` is omitted. Starting the relay enables live project activity under your FNV credentials, including claims and submissions. Start with one lane so you can inspect the workflow.
 
 ```sh
 fnv-relay lane create --parent-page 'YOUR_PRIVATE_PARENT_PAGE_URL_OR_UUID' --label first-lane
 fnv-relay lane list
 fnv-relay lane prompt ROUTE
-fnv-relay serve
+fnv-relay doctor
+fnv-relay start
 ```
 
-Replace `ROUTE` with the route reported for your lane. Paste the generated prompt into your own ChatGPT web conversation with Notion access. The agent works through that private lane while the local relay handles the official checks. Leave the relay running in its terminal. `serve` checks local toolchain/isolation readiness and validates both service credentials before polling. You can add another lane while it runs. A private lock under `~/.local/share/fnv-relay-locks` prevents simultaneous workers using the same FNV key across state directories; it does not coordinate different keys for one account or other applications. Use one relay state per owner key and follow project rules for other agents. A local `MATCH` is a prerequisite for submission, not a guarantee of the project's later verification verdict.
+Replace `ROUTE` with the route reported for your lane. Run `doctor` first. After it passes, run `start` and wait for **Relay running**. Leave that terminal open, then open a **new ChatGPT chat**, created after configuring the Notion connection and permissions, and paste the generated starter into it. In our user-reported trial, reusing a chat from before Notion was configured caused inconsistent tool access and early stopping. The agent works through that private lane while the local relay handles the official checks. Leave the relay running in its terminal. `serve` checks local toolchain/isolation readiness and validates both service credentials before polling. You can add another lane while it runs. A private lock under `~/.local/share/fnv-relay-locks` prevents simultaneous workers using the same FNV key across state directories; it does not coordinate different keys for one account or other applications. Use one relay state per owner key and follow project rules for other agents. A local `MATCH` is a prerequisite for submission, not a guarantee of the project's later verification verdict.
 
 Optional lane selectors include `--order largest`, or `smallest`; `--band '<=255'`, `256-511`, `512-1K`, `1K-4K`, or `4K+`; `--address 0x...`; and `--min-bytes` / `--max-bytes`. Quote bands containing shell metacharacters. Ordering chooses bands rather than globally ranking every open function; `closest` is not supported in this preview. Exact byte bounds can reject an allocated function outside your range. Selectors do not override project eligibility, tier limits, leases, or another agent's claims.
 
@@ -89,17 +132,80 @@ fnv-relay status
 fnv-relay stop
 ```
 
-`stop` requests a drain: no new work is assigned, and the worker exits after active leases are resolved. Inspect status before closing the terminal. Starting `serve` again resumes assignment and clears the drain request. `serve --once` runs one service pass for inspection, not a continuous worker. Respect upstream rate limits and claim deadlines. Use the project account status to confirm final verification and credit.
+`stop` (also `shutdown`) requests release of this relay's tracked claims, preserves checked best source, and waits up to 15 seconds for a running worker. If the worker is already stopped, it attempts release directly using your FNV credential; Notion authorization is not needed for that release. A timeout means shutdown is still pending, not that claims are resolved. `stop --timeout 60` allows a longer wait (maximum 120 seconds). Ambiguous submissions or releases stay reserved and are reported as pending/uncertain. Never delete state to bypass them.
 
-`fnv-relay reconcile` lists uncertain external operations without retrying or clearing them. Review actual service state before recovery; this preview does not provide an automatic reconciliation override. A claim request whose response was lost may already belong to your account: allocation pauses for manual review rather than requesting another claim. Inspect the official account status and resolve unknown claims before continuing; do not delete local state to bypass this pause.
+`drain` retains finish-current behavior: no new claims are assigned, while existing work can finish before the worker exits. `start` is an alias for foreground `serve`; Ctrl+C, SIGTERM, and terminal hangup request cleanup outside the signal handler. An in-flight compile may finish before cleanup. `serve --once` also releases tracked claims on exit, so it is a bounded live pass rather than a way to leave claims running unattended. Abrupt process death can only be handled by a surviving guardian while the machine remains up; power loss cannot trigger network release.
+
+Use `lane pause ROUTE_OR_LABEL` to stop future admissions without interrupting current work; add `--release` to request release now. Use `lane resume ROUTE_OR_LABEL` to deliberately enable a paused lane and its saved unfinished function, then `start` if the worker is stopped. Exact labels and unique route prefixes of at least four characters are accepted. Duplicate labels or ambiguous prefixes are rejected.
+
+New CLI lanes default to `--auto-resume`; use `--no-auto-resume` to opt out. Existing lanes without this policy retain their prior behavior. Continuation targets the same unfinished address after its cooldown and requires recent fresh agent activity (within 15 minutes), or an explicit user resume. It does not fall back to another function when that address is unavailable. Pause or stop blocks automatic admission while stopped. Deliberate `start` grants one continuation attempt to an unpaused lane with saved work, even if its prior heartbeat is stale; manually paused lanes stay paused. Saved candidates are context for the new claim and must be checked with its current pack before submission.
+
+`status` displays lane labels/routes, paused/resume state, current address/size/expiry, best recorded difference, check count, cooldown, and sanitized error type. `status --json` returns a stable `schema_version: 1` structure for scripts. Local status remains offline. `status --refresh` adds read-only FNV account totals and distinguishes all account claims from this key's claims and the locally tracked lanes. `logs --tail 20` shows recent sanitized event kinds, claim IDs and status tags; it excludes source, full error messages and remote bodies. Neither status view dumps candidate source, API keys, or full remote error bodies. Respect upstream rate limits and claim deadlines. Use the project account status to confirm final verification and credit.
+
+`fnv-relay reconcile` lists pending uncertain external operations without retrying or clearing them. Review actual service state before recovery; this preview does not provide an automatic reconciliation override. A claim request whose response was lost may already belong to your account: allocation pauses for manual review rather than requesting another claim. Inspect the official account status and resolve unknown claims before continuing; do not delete local state to bypass this pause.
 
 ## Troubleshooting
 
 - **Doctor fails:** resolve the specific credential, file, Wine, image, or sandbox check. Do not start live lanes until required checks pass.
-- **Notion page unavailable:** verify both the internal connection's parent-page access and your web agent's own Notion authorization.
+- **Notion page unavailable:** confirm the CLI authorized the intended account/workspace and the ChatGPT conversation has its own Notion access. For the advanced token fallback, also verify parent-page sharing with the internal connection.
 - **Notion 403:** inspect whether it is a permission failure or workspace block limit. Repeated retries cannot repair either configuration.
 - **Notion 429 / overload:** honor the service's retry delay. API and MCP limits can differ.
 - **No claim available:** account eligibility, other open claims, project capacity, and selector constraints can all prevent allocation. Do not create extra accounts or keys to evade limits.
 - **Checker rejects the image or compiler:** follow the official checker README. Do not submit unchecked source.
 
-References checked 2026-10-24: [FNV instructions](https://fnvdecomp.com/agents.md), [Notion authorization](https://developers.notion.com/guides/get-started/authorization), [workspace block limits](https://developers.notion.com/reference/workspace-block-limits), [request limits](https://developers.notion.com/reference/request-limits).
+References checked 2026-10-24: [FNV instructions](https://fnvdecomp.com/agents.md), [Notion hosted MCP authorization](https://developers.notion.com/guides/mcp/build-mcp-client), [Notion authorization](https://developers.notion.com/guides/get-started/authorization), [workspace block limits](https://developers.notion.com/reference/workspace-block-limits), [request limits](https://developers.notion.com/reference/request-limits).
+
+## Next assignments and model attribution
+
+Free or lighter models may end their turn before finishing a task. To continue, send **“Persistence, courier. o7”** in the same conversation. This worked in our Free-account trial; it is a suggestion, not a guarantee that the model will remain active.
+
+An accepted submission can move the lane to its next eligible function without waiting for overnight verification. The local `MATCH` and fresh independent check remain required; project limits and account-health checks still apply. The starter asks the web agent to keep checking its outbox after each task. The relay cannot force ChatGPT to stay active indefinitely or restart a completed web turn: if the web conversation stops, continue it yourself. Fresh agent activity or an explicit resume is still required for new admissions.
+
+FNV contribution credit stays with your account. New lanes default to the honest attribution `ChatGPT Web via Notion`, which describes the route without guessing a model. To record a model actually confirmed by the UI, pass `lane create --model-label 'YOUR CONFIRMED MODEL via Web'`. The setup wizard uses the route default. Subscription names or the agent's self-report do not establish model identity, and a web message cannot replace your configured attribution. Model attribution is optional project metadata; it does not change account ownership.
+
+## Restarting unfinished work
+
+`start` prints the starter again and shows each lane's current state. A running relay does not imply an active claim: the lane may be waiting for registration, reconnecting, preparing an assignment, or paused. You can retrieve the starter at any time with `fnv-relay lane prompt ROUTE`.
+
+When a lease is released, automatic continuation preserves the unfinished function and checked attempts. Restart with the same state directory. Use the newest assignment in the lane outbox; old claim identifiers expire.
+
+A definite FNV authentication/access refusal pauses the lane with its continuation intact. Check account access, then run `fnv-relay lane resume ROUTE`. An uncertain claim request is different: stop the relay, run `fnv-relay reconcile --claim ROUTE`, then `start`. Reconciliation verifies that no active claims belong to this key, keeps the original operation journal, and rearms the saved task locally. It does not send a claim request or retry a write. If any claim still belongs to the key, reconciliation refuses to proceed. Other uncertain operations require separate review.
+
+For Notion reconnection, stop the relay and run `fnv-relay auth notion connect`. Select the existing workspace. New credentials replace the old ones only after workspace identity and access to every existing lane page are verified. Keep the same state directory.
+
+Before reclaiming an unfinished function, the relay checks its eligibility with `function_info`. If FNV has paused it for problem-report review, the relay parks its continuation, publishes `CONTINUATION_PARKED` in the outbox, and selects another eligible function using the lane’s configured order. Existing attempts remain on disk, and status shows how many unfinished functions are parked. An older relay state paused for this reason recovers automatically on the next `start`; an owner-requested pause remains paused. Reconnecting cannot remove a project restriction.
+
+List preserved tasks with `fnv-relay lane parked ROUTE`. Once the project reopens one, use `fnv-relay lane resume ROUTE --address ADDRESS`. Finish or release any current claim first; the relay refuses to replace an active claim. Selecting another saved task also preserves the current continuation. It will check eligibility again before claiming, and park the task again if it remains unavailable.
+
+## Full-screen terminal app
+
+Run **`./relay`** after bootstrap to open the full-screen Courier console. **Overview** updates lane tables in place; **Lane controls** changes task selection, pauses work and resumes preserved functions; **History** shows score changes; **Activity** shows recorded data flow and errors; **Prompt notepad** stores editable copy-only prompts; **Settings** toggles metrics and opens account setup. Use the mouse, Tab, or F1–F6 to navigate. **Ctrl+Q** stops safely and exits. Keep the app open while solving; adding lanes and copying starters uses the same screen while the managed worker runs. Interrupted lane setup is recovered through Add lane. `fnv-relay text-menu` retains the numbered interface, and explicit `start`, `stop` and `status --json` commands remain available for scripts.
+
+In **Lane controls**, toggle **Allow previously attempted functions** off for fresh-only new selections. The current saved task can still be resumed. To move on immediately, select **Park current work and choose a new function now**, then apply and confirm. The controller finishes its current batch before applying queued changes. Previous sources, best results and history remain preserved.
+
+In **Prompt notepad**, select a preset, copy it into ChatGPT manually, or edit and save your own prompts. Nothing is sent automatically. **History** separates official and full-extent diagnostic metrics; **Settings** selects the displayed metric and visible columns. These preferences survive restarts.
+
+## Stopping and lease status
+
+The first Ctrl+C prints a stopping acknowledgement and cancels FNV read-retry backoff. An in-flight network request or compiler invocation may still need to finish before cleanup. The controller checks for shutdown again before starting another compiler check. Long service retry delays are deferred without holding the lane’s locks; their deadlines are retained rather than retried early.
+
+A confirmed release or observed expiry saves a `LEASE_CLOSED` notice locally. The controller publishes it to the private outbox with readback, so the web conversation can distinguish an old assignment from current lease state. Cleanup does not depend on Notion being reachable: an undelivered notice is retained for the next controller run. Observed expiry is reported as expiry, never as a successful release.
+
+
+New diagnostic checks retain the selected compiled object locally and attach a compact, source-bound evidence summary to each result. `candidate_artifacts` requests include full relocation-normalized target/candidate disassembly, aligned differences, region ranges and relocation bindings. Reports use the full candidate extent (up to 256 KiB), separately labeled from the official checker's limited-window metric, and add no compiler invocations. Derived relocation bindings are checker assumptions, not independent semantic proof. Binary objects remain local. Older checks without captured objects return an explicit unavailable reason; requesting evidence never recompiles. Independent plain MATCH validation remains unchanged.
+
+After reviewing an uncertain file upload from a closed claim, `fnv-relay reconcile --archive-upload OPERATION` can retain it as unresolved history and let unrelated work continue. Stop the relay first. This command requires retained release/expiry evidence and a read-only FNV check confirming no claims belong to this key. It preserves the original uncertain operation and local artifacts, records a separate source-hash-bound archive receipt, and neither resends the upload nor marks it successful. Reusing the original upload operation remains blocked. This exception applies only to file uploads; claims, submissions, releases and page setup keep their existing reconciliation rules.
+
+In the full-screen app, use **Settings & help → Reconnect Notion** if Notion sign-in expires. Confirm the safe stop, complete browser sign-in to the existing workspace, then press Enter to return to the dashboard. A relay that was running restarts after successful sign-in; a cancelled or failed sign-in leaves it stopped with saved work intact. No second terminal or manual auth command is needed.
+
+Each lane landing page also receives the approved `/goal` work-style guidance, including concrete candidate attempts and 30-second Python waits within the active turn. The addition is versioned separately from registration instructions and confirmed by readback. Existing lanes receive it on their next successful relay poll after Notion access is available; new lanes include it during setup.
+
+### Optional batch-attempt limits
+
+In **Lane controls**, set **Batch attempt limit per function** and apply the settings. `0` turns the limit off (the default). The same option is available when adding a lane, or with `lane configure ROUTE --max-attempts N`. Overview shows **Attempts** as `used / limit` or `used / off`; Settings can hide this column.
+
+An attempt is one distinct scoped batch round, regardless of whether it contains one candidate or eight. Re-delivery of the same batch does not increment the count. Batches rejected for invalid metadata do not count. Existing durable batch history is included retroactively, including interrupted rounds, and the same function's count carries across releases and reconnects in that lane. Checks remain a separate per-lease metric. A limit change queued during a batch takes effect after that batch finishes.
+
+At the limit, the controller stops accepting new candidate rounds for the function and asks for a scoped handoff. A match on the last allowed round still receives normal independent validation and submission. The handoff requests the best checked result, remaining mismatches, tried approaches and next steps. The controller waits up to five minutes, bounded by the lease safety cutoff, then preserves the received handoff (or the evidence already saved), releases the claim with checked best code when available, parks the unfinished function and selects another eligible function. Handoff requests are issued only at the limit; the ordinary starter and landing instructions do not offer a voluntary exit. An active handoff finishes even if its limit setting is subsequently changed.
+
+Selection with limits uses the official paginated function list and claims the selected address, skipping capped and parked functions. Fresh-only selection stays fresh-only. If no eligible function remains, the lane waits and checks again instead of immediately reclaiming capped work. Uncertain release or submission results retain their existing reconciliation safeguards and prevent rotation to another claim.
