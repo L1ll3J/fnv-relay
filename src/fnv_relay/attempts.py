@@ -85,6 +85,7 @@ def reserve(engine,lane,publication,identity):
 
 def selection(engine,lane,band):
     """Page the official eligible pool and select by address, excluding capped work."""
+    from .engine import band as size_band
     policy=lane['policy'];tallies=counts(engine.store,lane);maximum=policy.get('max_attempts') or 0
     parked={address(x['continuation']['address']) for x in lane.get('parked',[])}
     cursor=None;seen=set();best=None;eligible=0
@@ -98,6 +99,7 @@ def selection(engine,lane,band):
             if not isinstance(row,dict):raise ValueError('Invalid eligible function record')
             target=address(row.get('address'));size=row.get('size')
             if not target or type(size) is not int:raise ValueError('Invalid eligible function record')
+            if size_band(size)!=band:continue
             if target in parked or maximum and tallies.get(target,0)>=maximum:continue
             if not policy.get('allow_attempted',True) and row.get('earlier_claims')!=0:continue
             if not policy.get('min_bytes',0)<=size<=policy.get('max_bytes',2**31):continue

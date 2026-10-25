@@ -1,10 +1,11 @@
 """Owner-controlled selection policy; current work is never silently discarded."""
-from .preferences import ORDERS
+from .preferences import ORDERS, validate_bucket
 from .attempts import validate
 
 
-def configure(engine, route, *, order=None, allow_attempted=None, switch_now=False, paused=None, max_attempts=None):
+def configure(engine, route, *, order=None, allow_attempted=None, switch_now=False, paused=None, max_attempts=None, band=None):
     validate(max_attempts)
+    validate_bucket(band)
     if order is not None and order not in ORDERS:
         raise ValueError('Unknown task order')
     if allow_attempted is not None and type(allow_attempted) is not bool:
@@ -41,6 +42,9 @@ def configure(engine, route, *, order=None, allow_attempted=None, switch_now=Fal
             lane.update(paused=False, ready=True, explicit_resume=True, state='idle')
             lane.pop('blocked_reason', None)
             lane.pop('admission_not_before', None)
+        if band is not None:
+            if band=='any':policy.pop('band',None)
+            else:policy['band']=band
         if paused is not None:
             lane['paused']=paused
             lane['explicit_resume']=not paused
@@ -57,6 +61,7 @@ def configure(engine, route, *, order=None, allow_attempted=None, switch_now=Fal
 def queue(store, route, **options):
     from uuid import uuid4
     validate(options.get('max_attempts'))
+    validate_bucket(options.get('band'))
     if options.get('order') is not None and options['order'] not in ORDERS:
         raise ValueError('Unknown task order')
     if options.get('allow_attempted') is not None and type(options['allow_attempted']) is not bool:

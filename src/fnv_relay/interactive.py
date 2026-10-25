@@ -23,13 +23,13 @@ def choose_lane(store, *, ask, show, lanes=None):
         show('Enter one of the lane numbers shown.')
 
 
-def show_starter(lane, show):
+def show_starter(lane, show, store=None):
     if lane.get('state') == 'setup' or not lane.get('landing'):
         show('This lane is not ready yet. Choose Add lane to finish its incomplete setup.')
         return
     show('\nOpen a new ChatGPT chat after configuring Notion, then paste everything between these markers:')
     show('----- BEGIN CHATGPT PROMPT -----')
-    show(presentation.starter_prompt(lane))
+    show(presentation.starter_prompt(lane,store))
     show('----- END CHATGPT PROMPT -----')
     show('Keep the relay running while ChatGPT works. You can manage more lanes from this menu.')
 
@@ -70,7 +70,7 @@ def add_lane(store, dispatch, *, ask, show):
         show('Check status before creating another lane; the result needs review.')
         return
     show('\n'+presentation.clean(ready.get('label','Lane'))+' ready.')
-    show_starter(ready,show)
+    show_starter(ready,show,store)
 
 
 def run(store, dispatch, *, ask=None, show=print, worker=None):
@@ -98,12 +98,12 @@ def run(store, dispatch, *, ask=None, show=print, worker=None):
             elif choice == '1':
                 worker.start()
                 for lane in store.lanes():
-                    if lane.get('state') != 'setup' and lane.get('landing'): show_starter(lane,show)
+                    if lane.get('state') != 'setup' and lane.get('landing'): show_starter(lane,show,store)
                 if worker.running(): worker.live()
             elif choice == '2': add_lane(store,dispatch,ask=ask,show=show)
             elif choice == '3':
                 lane = choose_lane(store,ask=ask,show=show)
-                if lane: show_starter(lane,show)
+                if lane: show_starter(lane,show,store)
             elif choice == '4': dispatch(['status'])
             elif choice == '5':
                 lane = choose_lane(store,ask=ask,show=show)

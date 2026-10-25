@@ -248,7 +248,130 @@ def test_attempt_limit_controls_and_overview_default_off(tmp_path):
             app.query_one('#max-attempts',Input).value='12'
             button=app.query_one('#apply-policy');button.scroll_visible();await pilot.pause()
             await pilot.click('#apply-policy');await pilot.pause()
-            assert calls and calls[0][-2:]==['--max-attempts','12']
+            assert calls and calls[0][calls[0].index('--max-attempts')+1]=='12'
             assert store.lane('route-one')['policy'].get('max_attempts',0)==0
+        store.close()
+    asyncio.run(check())
+
+
+def test_starter_template_edit_preview_copy_save_and_cancel_while_worker_runs(tmp_path):
+    from fnv_relay import starter_templates
+    async def check():
+        store=make_store(tmp_path);worker=FakeWorker();worker.active=True;dispatch=[]
+        app=RelayApp(store,dispatch.append,worker=worker)
+        custom='Profile starter {{lane_label}}\n{{landing_url}}\nRoute {{route_uuid}}'
+        async with app.run_test(size=(160,55)) as pilot:
+            assert str(app.query_one('#starter').label)=='Starter Prompt'
+            await pilot.click('#starter');await pilot.pause()
+            await pilot.click('#edit-starter');await pilot.pause()
+            app.screen.query_one('#starter-text',TextArea).load_text(custom)
+            await pilot.click('#preview-starter');await pilot.pause()
+            preview=app.screen.query_one('#starter-text',TextArea).text
+            assert 'Profile starter Lane 1' in preview and 'Route route-one' in preview
+            assert '{{landing_url}}' not in preview
+            assert store.get(starter_templates.KEY) is None
+            copied=[];app.copy_to_clipboard=copied.append
+            await pilot.click('#copy-starter');assert copied==[preview]
+            await pilot.click('#save-starter');await pilot.pause()
+            assert starter_templates.load(store)==custom
+            await pilot.click('#edit-starter');await pilot.pause()
+            app.screen.query_one('#starter-text',TextArea).load_text('Unsaved {{landing_url}} {{route_uuid}}')
+            await pilot.click('#cancel-starter');await pilot.pause()
+            assert app.screen.query_one('#starter-text',TextArea).text==preview
+            assert starter_templates.load(store)==custom
+            await pilot.click('#close-starter');await pilot.pause()
+            assert worker.active and worker.calls==[] and dispatch==[]
+        store.close()
+    asyncio.run(check())
+
+
+def test_starter_template_invalid_preview_preserves_saved_text_and_reset_is_confirmed(tmp_path):
+    from fnv_relay import starter_templates
+    async def check():
+        store=make_store(tmp_path);custom='Custom {{landing_url}} {{route_uuid}}';starter_templates.save(store,custom)
+        app=RelayApp(store,lambda _:None,worker=FakeWorker())
+        async with app.run_test(size=(160,55)) as pilot:
+            await pilot.click('#starter');await pilot.pause()
+            await pilot.click('#edit-starter');await pilot.pause()
+            app.screen.query_one('#starter-text',TextArea).load_text('Missing lane details')
+            await pilot.click('#preview-starter');await pilot.pause()
+            assert app.screen.mode=='edit'
+            assert starter_templates.load(store)==custom
+            await pilot.click('#cancel-starter');await pilot.pause()
+            await pilot.click('#reset-starter');await pilot.pause()
+            await pilot.click('#no');await pilot.pause()
+            assert starter_templates.load(store)==custom
+            await pilot.click('#reset-starter');await pilot.pause()
+            await pilot.click('#yes');await pilot.pause()
+            assert starter_templates.load(store)==starter_templates.DEFAULT
+            assert app.screen.query_one('#starter-text',TextArea).text.startswith('Welcome courier o7')
+        store.close()
+    asyncio.run(check())
+
+
+def test_bucket_order_controls_are_independent_and_new_lane_can_choose_bucket(tmp_path):
+    async def check():
+        store=make_store(tmp_path);worker=FakeWorker();worker.active=True;app=RelayApp(store,lambda _:None,worker=worker)
+        async with app.run_test(size=(170,60)) as pilot:
+            await pilot.press('f2');await pilot.pause()
+            assert app.query_one('#band',Select).value=='any'
+            app.query_one('#band',Select).value='512-1K'
+            app.query_one('#order',Select).value='largest'
+            calls=[];app.launch_command=calls.append
+            app.query_one('#apply-policy').scroll_visible();await pilot.pause()
+            await pilot.click('#apply-policy');await pilot.pause()
+            assert calls[0][calls[0].index('--band')+1]=='512-1K'
+            assert calls[0][calls[0].index('--order')+1]=='largest'
+            await pilot.press('f1');await pilot.pause()
+            await pilot.click('#add');await pilot.pause()
+            app.screen.query_one('#new-band',Select).value='4K+'
+            app.screen.query_one('#create').scroll_visible();await pilot.pause()
+            await pilot.click('#create');await pilot.pause()
+            assert calls[-1][calls[-1].index('--band')+1]=='4K+'
+            assert worker.active and worker.calls==[]
+        store.close()
+    asyncio.run(check())
+
+
+def test_running_lane_settings_keep_typed_draft_across_table_rebuild_and_apply(tmp_path):
+    async def check():
+        store=make_store(tmp_path)
+        other=dict(store.lane('route-one'),route_token='route-two',label='Lane 2',policy={'order':'largest','allow_attempted':True,'max_attempts':7})
+        store.put_lane(other)
+        worker=FakeWorker();worker.active=True
+        app=RelayApp(store,lambda _:None,worker=worker)
+        async with app.run_test(size=(170,55)) as pilot:
+            await pilot.pause()
+            app.query_one('#lanes-table',DataTable).move_cursor(row=1)
+            await pilot.pause()
+            await pilot.press('f2');await pilot.pause()
+            field=app.query_one('#max-attempts',Input)
+            field.scroll_visible();await pilot.pause()
+            await pilot.click('#max-attempts')
+            await pilot.press('end','backspace','1','2')
+            app.query_one('#order',Select).value='smallest'
+            app.query_one('#band',Select).value='256-511'
+            app.query_one('#allow-attempted',Checkbox).value=False
+            # Rebuilding live columns previously reloaded saved values for the same lane.
+            app.settings['size']=False
+            app.refresh_data();await pilot.pause()
+            assert app.selected=='route-two'
+            assert field.value=='12'
+            assert app.query_one('#order',Select).value=='smallest'
+            assert app.query_one('#band',Select).value=='256-511'
+            assert not app.query_one('#allow-attempted',Checkbox).value
+            app.refresh_data();await pilot.pause()
+            assert field.value=='12'
+            calls=[];app.launch_command=calls.append
+            app.query_one('#apply-policy').scroll_visible();await pilot.pause()
+            await pilot.click('#apply-policy');await pilot.pause()
+            assert calls[0][calls[0].index('--max-attempts')+1]=='12'
+            assert store.lane('route-two')['policy']['max_attempts']==7
+            # Selecting a different lane discards the prior draft and loads saved settings.
+            app.query_one('#history-lane',Select).value='route-one';await pilot.pause()
+            assert field.value=='0'
+            assert app.query_one('#order',Select).value=='random'
+            app.query_one('#history-lane',Select).value='route-two';await pilot.pause()
+            assert field.value=='7'
         store.close()
     asyncio.run(check())
