@@ -14,7 +14,8 @@ def event_lines(store, event, labels, best=None):
     label=labels.get(data.get('claim_id')) or labels.get(data.get('route_token')) or data.get('claim_id') or 'Relay'
     prefix='['+when+'] '+presentation.clean(label)
     if kind=='check_complete':
-        record=store.get('check:'+data['claim_id']+':'+data['source_sha256']) or {}
+        key='check:'+data['claim_id']+':'+data['source_sha256']
+        record=store.get(data['check_key']) if data.get('check_key') else store.get(key+':legacy') or store.get(key)
         record=record if isinstance(record,dict) else {}
         result=record.get('result') or {}
         result=result if isinstance(result,dict) else {}

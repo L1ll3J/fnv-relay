@@ -19,7 +19,7 @@ import time
 import signal
 import threading
 
-from . import __version__, authentication, compiler, connections, preferences, presentation, setup, tools
+from . import __version__, authentication, compiler, connections, preferences, presentation, setup, tools, official_tools
 from .engine import BANDS, Engine, check_id, epoch
 from .notion import Notion, NotionError, page_id
 from .notion_oauth import OAuthError
@@ -467,6 +467,9 @@ def serve(store, once=False, order=None, menu_owner=None):
                 engine.ensure_work_guidance(lane)
         if store.pending_operations():
             raise UncertainOperation("Reconciliation required")
+        if official_tools.configured(store.config().get('paths', {})):
+            print('Checking current official FNV checker data…', flush=True)
+            official_tools.current(store, project, store.config()['paths'], force=True)
         selected,apply_order = preferences.start_order(store,order)
         if apply_order:
             for row in store.lanes():

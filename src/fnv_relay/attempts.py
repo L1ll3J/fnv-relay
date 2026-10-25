@@ -87,7 +87,8 @@ def selection(engine,lane,band):
     """Page the official eligible pool and select by address, excluding capped work."""
     from .engine import band as size_band
     policy=lane['policy'];tallies=counts(engine.store,lane);maximum=policy.get('max_attempts') or 0
-    parked={address(x['continuation']['address']) for x in lane.get('parked',[])}
+    # Project-paused work returns through the official eligible pool when reopened.
+    parked={address(x['continuation']['address']) for x in lane.get('parked',[]) if x.get('reason') != 'function_paused'}
     cursor=None;seen=set();best=None;eligible=0
     while not engine.stop_requested():
         args={'band':band,'order':'size','limit':500}
