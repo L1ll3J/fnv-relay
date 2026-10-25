@@ -277,14 +277,14 @@ class Engine:
             empty = lane.get('fresh_empty_bands', {}).get(b, 0) if policy.get('allow_attempted',True) is False else 0
             if empty > self.clock(): continue
             if row.get('allowed') and row.get('open', 0) > row.get('reserved_for_new', 0):
-                if policy.get('max_attempts'):
+                if policy.get('max_attempts') or policy.get('band'):
                     chosen=attempts.selection(self,lane,b)
                     if chosen:
                         lane.pop('attempt_pool_empty',None);self.store.put_lane(lane)
                         return chosen
                     continue
                 return {'band': b, 'prefer': 'any' if policy.get('allow_attempted',True) else 'fresh', 'context_mode': 'resume'}
-        if policy.get('max_attempts'):
+        if policy.get('max_attempts') or policy.get('band'):
             lane['attempt_pool_empty']=True;lane['admission_not_before']=self.clock()+60;self.store.put_lane(lane)
         return None
 

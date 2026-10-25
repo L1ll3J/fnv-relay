@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 import re
 
-from .notion import page_id
 from .store import AlreadyRunning
 
 
@@ -15,18 +14,9 @@ def clean(value, limit=80):
     return "".join(c if c.isprintable() else " " for c in text)[:limit]
 
 
-def starter_prompt(lane):
-    url = "https://app.notion.com/p/" + page_id(lane["landing"]).replace("-", "")
-    return ("Welcome courier o7\n\n"
-            "Today we're going to be doing some decompiling work, it's hard, but it's honest work. "
-            "You might find it difficult but that's okay, this is largely a game of creative trial-and-error. "
-            "Persistence and clever thinking will pay dividends here.\n\n"
-            + url + "\n\n"
-            "Read that landing page and register using route UUID `" + lane["route_token"] + "`, "
-            "following its HELLO instructions. Read future assignments and results from that lane’s outbox.\n\n"
-            "You have my explicit approval to read, create and edit pages within this private Notion relay for this project, "
-            "including uploading candidate source code and relevant project context, posting HELLO registrations and BATCH messages, "
-            "and recording findings and results.")
+def starter_prompt(lane, store=None):
+    from .starter_templates import render
+    return render(lane, store)
 
 
 def resolve_lane(store, value):

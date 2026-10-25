@@ -113,7 +113,7 @@ def wizard(store, *, ask=None, hidden=None, show=print):
         show("Then paste the text between these markers into that new chat:")
         show("")
         show("----- BEGIN CHATGPT PROMPT -----")
-        show(starter_prompt(lane_for_prompt))
+        show(starter_prompt(lane_for_prompt,store))
         show("----- END CHATGPT PROMPT -----")
         show("")
     show("Optional commands for another terminal while the relay is running:")

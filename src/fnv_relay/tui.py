@@ -16,28 +16,73 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, DataTable, Footer, Header, Input, Label, Select, Static, TabbedContent, TabPane, TextArea
 
-from . import presets, presentation
+from . import presets, presentation, preferences, starter_templates
 from .dashboard import Dashboard, clock
 from .managed import MenuWorker
 from .store import AlreadyRunning
 
 
 class PromptScreen(ModalScreen):
-    def __init__(self, text):
-        super().__init__(); self.text=text
+    def __init__(self,lane,store):
+        super().__init__();self.lane=lane;self.store=store
+        self.mode='saved';self.draft=starter_templates.load(store)
+        self.text=starter_templates.render(lane,store)
 
     def compose(self):
         with Vertical(classes='dialog'):
-            yield Label('ChatGPT starter')
-            yield Static('Keep the relay running. Open a NEW ChatGPT chat after configuring Notion, then paste this text.')
+            yield Label(Text('Starter Prompt · '+self.lane.get('label','Lane')))
+            yield Static('Keep the relay running. Open a NEW ChatGPT chat after configuring Notion, then paste this text.',id='starter-help',markup=False)
             yield TextArea(self.text,read_only=True,id='starter-text')
             with Horizontal(classes='buttons'):
-                yield Button('Copy starter',id='copy-starter',variant='primary')
+                yield Button('Copy',id='copy-starter',variant='primary')
+                yield Button('Edit template',id='edit-starter')
+                yield Button('Preview',id='preview-starter')
                 yield Button('Close',id='close-starter')
+            with Horizontal(classes='buttons'):
+                yield Button('Save template',id='save-starter',variant='primary')
+                yield Button('Cancel edit',id='cancel-starter')
+                yield Button('Restore default',id='reset-starter')
+
+    def on_mount(self):self.show_mode('saved')
+
+    def show_mode(self,mode):
+        self.mode=mode
+        editor=self.query_one('#starter-text',TextArea)
+        editor.read_only=mode!='edit'
+        editor.load_text(self.draft if mode=='edit' else self.text)
+        for action,visible in [('copy',mode!='edit'),('edit',mode!='edit'),('preview',mode=='edit'),
+                               ('save',mode!='saved'),('cancel',mode!='saved')]:
+            self.query_one('#'+action+'-starter',Button).display=visible
+        self.query_one('#edit-starter',Button).label='Back to editor' if mode=='preview' else 'Edit template'
+        help_text=('Template for this profile’s lanes. Keep {{landing_url}} and {{route_uuid}}; {{lane_label}} is optional. Save changes only the local template; nothing is sent.'
+                   if mode=='edit' else 'Unsaved preview for this lane. Save template to apply it to future starter prompts.'
+                   if mode=='preview' else 'Keep the relay running. Open a NEW ChatGPT chat after configuring Notion, then paste this text.')
+        self.query_one('#starter-help',Static).update(help_text)
+        if mode=='edit':editor.focus()
+
+    def show_saved(self):
+        self.draft=starter_templates.load(self.store)
+        self.text=starter_templates.render(self.lane,self.store)
+        self.show_mode('saved')
 
     def on_button_pressed(self,event):
-        event.stop()
-        if event.button.id=='copy-starter':self.app.copy_text(self.text)
+        event.stop();action=event.button.id
+        if action=='copy-starter':self.app.copy_text(self.text)
+        elif action=='edit-starter':self.show_mode('edit')
+        elif action in ('preview-starter','save-starter'):
+            if self.mode=='edit':self.draft=self.query_one('#starter-text',TextArea).text
+            try:
+                preview=starter_templates.render(self.lane,template=self.draft)
+                if action=='save-starter':
+                    starter_templates.save(self.store,self.draft);self.show_saved()
+                    self.app.notify('Starter template saved for this profile. Nothing was sent.')
+                else:self.text=preview;self.show_mode('preview')
+            except ValueError as error:self.app.notify(str(error),severity='error')
+        elif action=='cancel-starter':self.show_saved()
+        elif action=='reset-starter':
+            def restore(yes):
+                if yes:starter_templates.reset(self.store);self.show_saved()
+            self.app.push_screen(ConfirmScreen('Restore the original starter template for this profile? Saved custom wording will be replaced. Nothing will be sent.'),restore)
         else:self.dismiss()
 
 
@@ -55,10 +100,11 @@ class ConfirmScreen(ModalScreen[bool]):
 class AddLaneScreen(ModalScreen[dict | None]):
     def __init__(self,number):super().__init__();self.number=number
     def compose(self):
-        with Vertical(classes='confirmation'):
+        with VerticalScroll(classes='confirmation'):
             yield Label('Add a lane')
             yield Input('Lane '+str(self.number),placeholder='Lane name',id='new-label',max_length=100)
             yield Select([('Largest first','largest'),('Smallest first','smallest'),('Random size band','random')],value='largest',allow_blank=False,id='new-order')
+            yield Select(preferences.BUCKETS,value='any',allow_blank=False,id='new-band',prompt='Size bucket')
             yield Checkbox('Allow previously attempted functions',value=False,id='new-attempted')
             yield Input('0',placeholder='Batch attempt limit per function (0 = off)',id='new-max-attempts',type='integer')
             yield Static('Attempt limit: 0 = off. One accepted batch is one round, whether it has one candidate or eight.')
@@ -77,7 +123,7 @@ class AddLaneScreen(ModalScreen[dict | None]):
             validate(maximum)
         except ValueError:self.notify('Enter a non-negative attempt limit (0 = off).',severity='warning');return
         self.dismiss({'label':label,'max_attempts':maximum,'order':self.query_one('#new-order',Select).value,
-                      'allow_attempted':self.query_one('#new-attempted',Checkbox).value})
+                      'allow_attempted':self.query_one('#new-attempted',Checkbox).value,'band':self.query_one('#new-band',Select).value})
 
 
 class RelayApp(App):
@@ -135,12 +181,14 @@ class RelayApp(App):
                     yield Button('Start relay',id='start',variant='success')
                     yield Button('Stop safely',id='stop')
                     yield Button('Add lane',id='add',variant='primary')
-                    yield Button('Copy / view starter',id='starter')
+                    yield Button('Starter Prompt',id='starter')
             with TabPane('Lane controls',id='lanes'):
                 with VerticalScroll():
                     yield Static('Select a lane in Overview. Settings apply to future selections; saved unfinished work can still be resumed.',classes='help')
                     yield Static('',id='policy-info',markup=False)
                     yield Select([('Largest first','largest'),('Smallest first','smallest'),('Random size band','random')],allow_blank=False,value='largest',id='order')
+                    yield Select(preferences.BUCKETS,value='any',allow_blank=False,id='band',prompt='Size bucket')
+                    yield Static('Size bucket for new selections. FNV uses 1 KB = 1,024 B: 1–4 KB starts at 1,025 B; 4 KB+ starts at 4,097 B.',classes='help')
                     yield Checkbox('Allow previously attempted functions',value=True,id='allow-attempted')
                     yield Static('Batch attempt limit per function: 0 = off. Existing rounds in this lane count across reconnects. An active handoff finishes even if the limit is changed.',classes='help')
                     yield Input('0',id='max-attempts',type='integer')
@@ -232,7 +280,7 @@ class RelayApp(App):
                     'address':row['address'],'size':str(row['size_bytes'] or '—'),'best':str(progress['best']) if progress['best'] is not None else '—',
                     'checks':str(row['checks']),'attempts':str(row['attempts'])+(' / '+str(row['max_attempts']) if row['max_attempts'] else ' / off'),'since_checks':str(progress['checks_since_best']) if progress['checks_since_best'] is not None else '—',
                     'since_time':progress['since_best'],'expires':clock(row['expires_at']),
-                    'policy':row['order']+(' · fresh' if not row['allow_attempted'] else ' · any'),
+                    'policy':row['order']+' · '+dict((value,label) for label,value in preferences.BUCKETS).get(row['band'],row['band'])+(' · fresh' if not row['allow_attempted'] else ' · any'),
                     'error':'change queued' if row['control_pending'] else 'handoff requested' if row['awaiting_handoff'] else 'waiting for eligible work' if row['attempt_pool_empty'] else 'waiting for fresh work' if row['waiting_fresh'] else row['error_type'] or '—'}
             cells=[Text(values[key]) for key,_ in columns]
             if changed:table.add_row(*cells,key=row['route_token'])
@@ -279,6 +327,7 @@ class RelayApp(App):
         lane=self.store.lane(self.selected);policy=lane.get('policy',{})
         self.query_one('#policy-info',Static).update(Text(lane.get('label','Lane')+' · '+self.selected))
         self.query_one('#order',Select).value=policy.get('order','largest')
+        self.query_one('#band',Select).value=policy.get('band','any')
         self.query_one('#allow-attempted',Checkbox).value=policy.get('allow_attempted',True)
         self.query_one('#max-attempts',Input).value=str(policy.get('max_attempts') or 0)
         saved=[('Continue current saved work','current')]
@@ -396,7 +445,7 @@ class RelayApp(App):
     async def action_quit(self):await self.stop_worker(exit_after=True)
 
     def choose_add(self,choice):
-        if choice:self.launch_command(['lane','create','--label',choice['label'],'--order',choice['order'],'--allow-attempted' if choice['allow_attempted'] else '--no-allow-attempted','--max-attempts',str(choice.get('max_attempts',0))])
+        if choice:self.launch_command(['lane','create','--label',choice['label'],'--order',choice['order'],'--allow-attempted' if choice['allow_attempted'] else '--no-allow-attempted','--max-attempts',str(choice.get('max_attempts',0)),'--band',choice.get('band','any')])
 
     def update_notepad_options(self):
         self.note_loading=True
@@ -431,11 +480,11 @@ class RelayApp(App):
         elif action=='starter':
             lane=self.store.lane(self.selected) if self.selected else None
             if not lane or not lane.get('landing'):self.notice('Add or recover a lane first.');return
-            self.push_screen(PromptScreen(presentation.starter_prompt(lane)))
+            self.push_screen(PromptScreen(lane,self.store))
         elif action=='apply-policy' and self.selected:
             args=['lane','configure',self.selected,'--order',self.query_one('#order',Select).value,
                   '--allow-attempted' if self.query_one('#allow-attempted',Checkbox).value else '--no-allow-attempted',
-                  '--max-attempts',self.query_one('#max-attempts',Input).value]
+                  '--max-attempts',self.query_one('#max-attempts',Input).value,'--band',self.query_one('#band',Select).value]
             if self.query_one('#switch-now',Checkbox).value:
                 args.append('--switch-now');self.push_screen(ConfirmScreen('Preserve and release the current assignment, park its work, and select a new function with these settings?'),lambda yes:self.launch_command(args) if yes else None)
             else:self.launch_command(args)

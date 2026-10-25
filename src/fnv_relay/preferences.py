@@ -2,6 +2,13 @@
 import sys
 
 ORDERS = ('largest', 'smallest', 'random')
+BUCKETS = [('Any size','any'),('≤255 B','<=255'),('256–511 B','256-511'),
+           ('512 B–1 KB','512-1K'),('1–4 KB','1K-4K'),('4 KB+','4K+')]
+
+
+def validate_bucket(value):
+    if value is not None and (not isinstance(value,str) or value not in {key for _,key in BUCKETS}):
+        raise ValueError('Unknown size bucket')
 
 
 def choose_order(store, *, ask=None, show=print):

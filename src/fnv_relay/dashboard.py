@@ -62,6 +62,7 @@ class Dashboard:
         data=snapshot(self.store,__version__)
         for row in data['lanes']:
             lane=next(x for x in lanes if x['route_token']==row['route_token'])
+            row['band']=lane.get('policy',{}).get('band','any')
             row['order']=lane.get('policy',{}).get('order','largest')
             row['allow_attempted']=lane.get('policy',{}).get('allow_attempted',True)
             row['attempt_pool_empty']=bool(lane.get('attempt_pool_empty'))

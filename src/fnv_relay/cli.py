@@ -67,7 +67,7 @@ def parser():
     create.add_argument("--order", choices=preferences.ORDERS, help="Default: task order saved during setup")
     create.add_argument("--allow-attempted", action=argparse.BooleanOptionalAction, default=None, help="Allow previously attempted functions in new selections")
     create.add_argument("--max-attempts", type=int, default=0, help="Maximum batch rounds per function in this lane; 0 = off")
-    create.add_argument("--band", choices=BANDS)
+    create.add_argument("--band", choices=[value for _,value in preferences.BUCKETS])
     create.add_argument("--address")
     create.add_argument("--min-bytes", type=int, default=0)
     create.add_argument("--max-bytes", type=int, default=2**31 - 1)
@@ -76,6 +76,7 @@ def parser():
     settings = lane.add_parser("configure", help="Change future selection; optionally park current work and switch now")
     settings.add_argument("route")
     settings.add_argument("--order", choices=preferences.ORDERS)
+    settings.add_argument("--band", choices=[value for _,value in preferences.BUCKETS], help="Future function size bucket; any clears the bucket filter")
     settings.add_argument("--allow-attempted", action=argparse.BooleanOptionalAction, default=None)
     settings.add_argument("--paused", action=argparse.BooleanOptionalAction, default=None, help="Pause or unpause future selections")
     settings.add_argument("--max-attempts", type=int, help="Batch rounds per function, including existing rounds; 0 = off")
@@ -137,7 +138,7 @@ def policy(args):
         result["max_attempts"]=args.max_attempts
     if getattr(args,"allow_attempted",None) is not None:
         result["allow_attempted"] = args.allow_attempted
-    if args.band:
+    if args.band and args.band != "any":
         result["band"] = args.band
     if args.address:
         result["address"] = args.address
@@ -265,7 +266,7 @@ def lane_command(store, args):
         lane = presentation.resolve_lane(store,args.route)
         project = FNV(store.secrets().get('fnv_api_key','')) if args.switch_now and lane.get('lease') else None
         engine = Engine(store,project,None,watchdog=False)
-        options=dict(order=args.order,allow_attempted=args.allow_attempted,switch_now=args.switch_now,paused=args.paused,max_attempts=args.max_attempts)
+        options=dict(order=args.order,allow_attempted=args.allow_attempted,switch_now=args.switch_now,paused=args.paused,max_attempts=args.max_attempts,band=args.band)
         try:
             with store.lock('serve'):
                 lane=configure_lane(engine,lane['route_token'],**options)
@@ -282,7 +283,7 @@ def lane_command(store, args):
         if lane.get('state') == 'setup' or not lane.get('landing'):
             print('Lane setup is incomplete. Use Add lane in the menu to recover it before copying a starter.')
             return
-        print(presentation.starter_prompt(lane))
+        print(presentation.starter_prompt(lane,store))
     elif args.lane_action == "recover":
         lane = presentation.resolve_lane(store,args.route)
         project,notion = clients(store)
@@ -488,7 +489,7 @@ def serve(store, once=False, order=None, menu_owner=None):
                     if row.get("landing"):
                         print("\nOpen a NEW ChatGPT chat after configuring Notion. Paste this starter (also available with lane prompt " + row["route_token"] + "):")
                         print("----- BEGIN CHATGPT PROMPT -----")
-                        print(presentation.starter_prompt(row))
+                        print(presentation.starter_prompt(row,store))
                         print("----- END CHATGPT PROMPT -----", flush=True)
                 previous_status = None
                 while not stopping() and not store.get("shutdown_requested"):
