@@ -111,3 +111,24 @@ def test_local_policy_command_runs_without_blocking_ui_or_network(tmp_path):
             assert app.query_one(TabbedContent).active=='history'
         store.close()
     asyncio.run(check())
+
+
+
+def test_history_keeps_reading_position_during_live_refresh(tmp_path):
+    async def check():
+        store=make_store(tmp_path)
+        def add(number):
+            source='source-'+str(number)
+            store.set('check:claim:'+source,{'state':'complete','result':{'status':'wip','pack_sha256':'same-pack','checker':{'ndiff_insn':10-number}}})
+            store.event('check_complete',{'route_token':'route-one','claim_id':'claim','source_sha256':source})
+        for number in (1,2,3):add(number)
+        app=RelayApp(store,lambda _:None,worker=FakeWorker())
+        async with app.run_test(size=(120,40)) as pilot:
+            await pilot.press('f3');await pilot.pause()
+            table=app.query_one('#history-table',DataTable)
+            table.move_cursor(row=1);await pilot.pause()
+            app.refresh_data();assert table.cursor_row==1
+            add(4);app.refresh_data();await pilot.pause()
+            assert table.cursor_row==2
+        store.close()
+    asyncio.run(check())

@@ -237,10 +237,12 @@ class RelayApp(App):
             self.route_options=options
         self.refresh_details()
         self.refresh_history()
-        activity=self.query_one('#activity-table',DataTable);activity.clear()
+        activity=self.query_one('#activity-table',DataTable)
         labels={x['route_token']:x['label'] for x in rows}
-        for event in reversed(self.model.activity[-100:]):
-            activity.add_row(datetime.fromtimestamp(event['at'],timezone.utc).strftime('%H:%M:%S'),labels.get(event['route'],'—'),event['kind'],Text(event['message'] or event['type'] or event['claim_id'] or ''))
+        recent=list(reversed(self.model.activity[-100:]))
+        self.replace_rows(activity,[(str(e['id']),[
+            datetime.fromtimestamp(e['at'],timezone.utc).strftime('%H:%M:%S'),
+            Text(labels.get(e['route'],'—')),e['kind'],Text(e['message'] or e['type'] or e['claim_id'] or '')]) for e in recent])
         configured=self.data['credentials_configured']
         self.query_one('#account-info',Static).update(Text('Accounts configured: FNV '+('yes' if configured['fnv'] else 'no')+' · Notion '+('yes' if configured['notion'] else 'no')+'\nAccount setup requires the relay stopped. Start never happens automatically. Ctrl+Q stops safely before exiting.'))
 
@@ -269,12 +271,29 @@ class RelayApp(App):
         self.query_one('#saved-work',Select).set_options(saved)
         self.query_one('#saved-info',Static).update('Sources, checked bests and history stay preserved when switching tasks.')
 
+    @staticmethod
+    def replace_rows(table,rows,scope=None):
+        keys=tuple(key for key,_ in rows)
+        fingerprint=(scope,keys)
+        if getattr(table,'relay_fingerprint',None)==fingerprint:return
+        previous=getattr(table,'relay_keys',())
+        anchor=previous[table.cursor_row] if previous and table.cursor_row<len(previous) and (table.cursor_row>0 or table.scroll_y>0) else None
+        table.clear()
+        for key,values in rows:table.add_row(*values,key=key)
+        table.relay_keys=keys;table.relay_fingerprint=fingerprint
+        if anchor in keys:table.move_cursor(row=keys.index(anchor))
+
     def refresh_history(self):
-        table=self.query_one('#history-table',DataTable);table.clear()
-        if not self.selected:return
-        for row in reversed(self.model.history(self.selected,self.settings.get('metric','ndiff_insn'))[-200:]):
-            change='−'+str(row['delta'])+' NEW BEST' if row['improved'] else 'baseline / no decrease'
-            table.add_row(datetime.fromtimestamp(row['at'],timezone.utc).strftime('%m-%d %H:%M:%S'),row['claim_id'][:14],str(row['index']),str(row['score']),change,row['status'] or '—',row['source'][:12])
+        table=self.query_one('#history-table',DataTable)
+        metric=self.settings.get('metric','ndiff_insn')
+        rows=[]
+        if self.selected:
+            for row in reversed(self.model.history(self.selected,metric)[-200:]):
+                change='−'+str(row['delta'])+' NEW BEST' if row['improved'] else 'baseline / no decrease'
+                rows.append((row['claim_id']+':'+row['source'],[
+                    datetime.fromtimestamp(row['at'],timezone.utc).strftime('%m-%d %H:%M:%S'),
+                    row['claim_id'][:14],str(row['index']),str(row['score']),change,row['status'] or '—',row['source'][:12]]))
+        self.replace_rows(table,rows,scope=(self.selected,metric))
 
     def on_data_table_row_highlighted(self,event):
         if event.data_table.id=='lanes-table' and event.row_key.value!=self.selected:

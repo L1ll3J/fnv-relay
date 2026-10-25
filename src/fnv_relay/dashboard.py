@@ -55,7 +55,7 @@ class Dashboard:
                     self.checks.append({'claim_id':claim,'route':route,'index':data.get('check_index',self.counts[claim]),
                                         'at':event['created'],'source':data['source_sha256'],'status':result.get('status'),
                                         'pack':result.get('pack_sha256'),'metrics':values})
-                self.activity.append({'at':event['created'],'kind':kind,'route':route,
+                self.activity.append({'id':event['id'],'at':event['created'],'kind':kind,'route':route,
                                       'claim_id':claim,'type':clean(data.get('type',''),60),
                                       'message':clean(data.get('message',''),400)})
             self.activity=self.activity[-1000:]
