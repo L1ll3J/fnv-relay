@@ -132,3 +132,20 @@ def test_history_keeps_reading_position_during_live_refresh(tmp_path):
             assert table.cursor_row==2
         store.close()
     asyncio.run(check())
+
+
+
+def test_history_lane_choice_and_overview_selection_stay_in_sync(tmp_path):
+    async def check():
+        store=make_store(tmp_path)
+        store.put_lane({'route_token':'route-two','label':'Lane 2','state':'idle','policy':{'order':'smallest'}})
+        app=RelayApp(store,lambda _:None,worker=FakeWorker())
+        async with app.run_test(size=(120,40)) as pilot:
+            await pilot.press('f3');await pilot.pause()
+            app.query_one('#history-lane',Select).value='route-two'
+            await pilot.pause()
+            assert app.selected=='route-two'
+            assert app.query_one('#lanes-table',DataTable).cursor_row==1
+            assert app.query_one('#order',Select).value=='smallest'
+        store.close()
+    asyncio.run(check())

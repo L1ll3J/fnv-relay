@@ -305,6 +305,9 @@ class RelayApp(App):
             self.settings['metric']=event.value;self.store.set('terminal_display',self.settings);self.refresh_data()
         elif event.select.id=='history-lane' and event.value is not Select.NULL:
             self.selected=event.value;self.load_lane_controls();self.refresh_history();self.refresh_details()
+            if self.data:
+                routes=[row['route_token'] for row in self.data['lanes']]
+                if self.selected in routes:self.query_one('#lanes-table',DataTable).move_cursor(row=routes.index(self.selected))
         elif event.select.id=='preset' and event.value is not Select.NULL and not self.note_loading:
             entry=next((x for x in self.entries if x['id']==event.value),None)
             if entry:
