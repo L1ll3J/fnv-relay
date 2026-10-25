@@ -126,6 +126,37 @@ def test_handoff_wrong_scope_cannot_release_another_claim(env):
     assert not any(name=='giveup' for name,_ in env.project.calls)
 
 
+@pytest.mark.parametrize('reason',['unsolicited_handoff','request_id_mismatch','invalid_handoff_fields'])
+def test_invalid_handoff_is_rejected_once_and_later_messages_continue(env,reason):
+    assign(env)
+    current=lane(env);lease=deepcopy(current['lease'])
+    if reason!='unsolicited_handoff':
+        current['attempt_handoff']={'request_id':'expected','claim_id':lease['claim_id'],
+            'pack_sha256':lease['pack_sha256'],'address':lease['address'],
+            'deadline':env.engine.clock()+300,'notified':True}
+        env.store.put_lane(current)
+    handoff=message(env,'HANDOFF','invalid-handoff',request_id='expected',summary='saved best',
+                    remaining_mismatches='frame layout',approaches_tried='one candidate',next_steps='inspect')
+    if reason=='request_id_mismatch':handoff['request_id']='wrong'
+    if reason=='invalid_handoff_fields':handoff['summary']=''
+    env.notion.append(current['inbox'],handoff)
+    finding=message(env,'FINDING','later-finding',summary='preserved evidence')
+    env.notion.append(current['inbox'],finding)
+    env.engine.poll();env.engine.poll()
+    current=lane(env)
+    assert current['lease']==lease
+    assert not current.get('attempt_handoff',{}).get('received')
+    assert not any(name=='giveup' for name,_ in env.project.calls)
+    notices=[r['payload'] for r in env.notion.messages(current['outbox']) if r.get('kind')=='RESULT']
+    rejected=[r for r in notices if r.get('status')=='HANDOFF_REJECTED']
+    assert len(rejected)==1 and rejected[0]['reason_code']==reason
+    assert any(r.get('status')=='RECORDED_REVIEW_ONLY' and r.get('message_id')=='later-finding' for r in notices)
+    saved=env.store.get('handoff-rejected:'+env.route+':invalid-handoff')
+    assert saved=={'reason_code':reason,'message':handoff}
+    assert env.store.get('message:'+env.route+':invalid-handoff')
+    assert not env.store.get('last_error:'+env.route)
+
+
 def test_uncertain_release_prevents_rotation_and_new_claims(env):
     assign(env);limit(env,1);batch(env,'round1');env.engine.poll()
     current=lane(env)
