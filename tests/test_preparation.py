@@ -53,6 +53,27 @@ def test_preparations_overlap_with_private_connections_and_bounded_admission(tmp
     finally:release.set();pool.close();store.close()
 
 
+def test_default_prepares_all_lanes_and_new_lanes_without_waiting_for_a_slot(tmp_path,monkeypatch):
+    store=Store(tmp_path/'state');rows=[preparing(store,str(i)) for i in range(12)]
+    started=threading.Barrier(13);added_started=threading.Event();release=threading.Event();errors=[]
+    def prepare(engine,row):
+        if row['route_token']=='added':added_started.set()
+        else:started.wait(timeout=10)
+        assert release.wait(10)
+    monkeypatch.setattr(Engine,'prepare_assignment',prepare)
+    pool=preparation.PreparationPool(store.root,lambda s:(None,None),lambda:False,lambda *e:errors.append(e))
+    try:
+        assert all(pool.submit(row) for row in rows)
+        started.wait(timeout=10)
+        assert len(pool.jobs)==12 and not pool.submit(rows[0])
+        added=preparing(store,'added')
+        assert pool.submit(added) and added_started.wait(5)
+        assert len(pool.jobs)==13
+        release.set();finish(pool)
+        assert not errors and not pool.lane_executors
+    finally:release.set();pool.close();store.close()
+
+
 def test_errors_are_reaped_on_controller_thread_and_retry_same_scope(tmp_path,monkeypatch):
     store=Store(tmp_path/'state');row=preparing(store,'one')
     parent=Engine(store,None,None,clock=lambda:100,watchdog=False)

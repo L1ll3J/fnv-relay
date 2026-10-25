@@ -72,6 +72,6 @@ In **Add lane** or **Lane controls**, select any combination of size buckets ind
 
 Start checks the current official checker and shared data before accepting work. New claims use validated tool snapshots, refreshed at least every five minutes while selecting work. A missing target address triggers another official refresh before candidate checks can run. Existing assignments retain their snapshot; downloads never overwrite files used by another running check or profile.
 
-Up to four lanes prepare their assignments concurrently. Each preparation job has its own state connection and service clients; claim acquisition and compiler checks stay on the controller. Notion requests may still queue behind the shared OAuth lock. Stopping waits for preparation jobs before releasing remaining claims.
+Every eligible lane can prepare its assignment concurrently, with one preparation job per lane and no fixed four-lane cap. Each preparation job has its own state connection and service clients; claim acquisition and compiler checks stay on the controller. Notion requests may still queue behind the shared OAuth lock. Stopping waits for preparation jobs before releasing remaining claims.
 
 Functions parked because FNV paused them can return through FNV's eligible pool after reopening. Fresh-only settings and configured attempt limits still apply; work parked by the operator stays parked.
