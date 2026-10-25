@@ -138,7 +138,7 @@ def test_provider_runtime_never_opens_interactive_browser(tmp_path,monkeypatch):
     store=Store(tmp_path); storage=oauth.TokenStorage(store,staged=True)
     auth=oauth.provider(storage,open_browser=lambda _:pytest.fail('runtime browser opened'))
     # SDK callback is deliberately guarded even if discovery asks for fresh authorization.
-    with pytest.raises(oauth.OAuthError,match='auth notion connect'):
+    with pytest.raises(oauth.OAuthError,match='Reconnect Notion'):
         asyncio.run(auth.context.redirect_handler(oauth.ORIGIN+'/authorize'))
     store.close()
 
@@ -192,6 +192,8 @@ def test_reconnect_verifies_existing_workspace_and_every_lane_page_before_commit
     store.set_secret(oauth.SECRET_NAME,{'tokens':{'access_token':'old-access'}})
     lane={'route_token':'route','landing':'landing','inbox':'inbox','outbox':'outbox','data':'data'}
     store.put_lane(lane)
+    store.set('last_error:route',{'type':'OAuthError','message':'old sign-in failure'})
+    store.set('last_error:unrelated',{'type':'ValueError','message':'keep this error'})
     before=store.secrets(); calls=[]
     async def signed_in(auth,name,args,**kwargs):
         calls.append((name,args))
@@ -208,6 +210,8 @@ def test_reconnect_verifies_existing_workspace_and_every_lane_page_before_commit
         oauth.connect(store,_call=signed_in,show=lambda _:None,timeout=1)
         assert store.secrets()[oauth.SECRET_NAME]['tokens']['access_token']=='new-access'
         assert [args['id'] for name,args in calls if name=='notion-fetch']==['landing','inbox','outbox','data']
+    assert bool(store.get('last_error:route')) is bool(failure)
+    assert store.get('last_error:unrelated')['type']=='ValueError'
     assert store.config()['notion_parent_page']=='keep-parent'
     assert store.lanes()==[lane]
     store.close()

@@ -149,3 +149,89 @@ def test_history_lane_choice_and_overview_selection_stay_in_sync(tmp_path):
             assert app.query_one('#order',Select).value=='smallest'
         store.close()
     asyncio.run(check())
+
+
+def test_reconnect_notion_stops_before_signin_and_restarts_only_on_success(tmp_path):
+    async def check():
+        for result in (0,1,130):
+            store=make_store(tmp_path/str(result));worker=FakeWorker();worker.active=True
+            app=RelayApp(store,lambda _:None,worker=worker);actions=[]
+            async def stop():
+                actions.append('stop');worker.active=False;return True
+            def signin(args):
+                assert not worker.active
+                assert app.busy
+                actions.append(args)
+                return result
+            app.stop_worker=stop;app.interactive_command=signin
+            async with app.run_test(size=(145,48)) as pilot:
+                await app.reconnect_notion();await pilot.pause()
+                assert actions==['stop',['auth','notion','connect']]
+                assert worker.calls==(['start'] if result==0 else [])
+                assert not app.busy
+            store.close()
+    asyncio.run(check())
+
+
+def test_reconnect_notion_does_not_start_a_previously_stopped_relay(tmp_path):
+    async def check():
+        store=make_store(tmp_path);worker=FakeWorker();app=RelayApp(store,lambda _:None,worker=worker)
+        calls=[];app.interactive_command=lambda args:calls.append(args) or 0
+        async with app.run_test(size=(145,48)) as pilot:
+            await app.reconnect_notion()
+            assert calls==[['auth','notion','connect']]
+            assert worker.calls==[]
+        store.close()
+    asyncio.run(check())
+
+
+def test_reconnect_notion_aborts_on_failed_shutdown_or_remaining_claim(tmp_path):
+    async def check():
+        for blocked in ('failed','lease','running','busy'):
+            store=make_store(tmp_path/blocked);worker=FakeWorker();app=RelayApp(store,lambda _:None,worker=worker)
+            async def stop():
+                if blocked=='lease':
+                    lane=store.lane('route-one');lane['lease']={'claim_id':'clm_live'};store.put_lane(lane)
+                if blocked=='running':worker.active=True
+                return blocked!='failed'
+            app.stop_worker=stop;calls=[];app.interactive_command=lambda args:calls.append(args) or 0
+            async with app.run_test(size=(145,48)) as pilot:
+                app.busy=blocked=='busy'
+                await app.reconnect_notion()
+                assert calls==[] and worker.calls==[]
+                app.busy=False
+            store.close()
+    asyncio.run(check())
+
+
+def test_reconnect_button_requires_confirmation_and_can_cancel(tmp_path):
+    async def check():
+        store=make_store(tmp_path);worker=FakeWorker();app=RelayApp(store,lambda _:None,worker=worker)
+        calls=[]
+        async def reconnect():calls.append('reconnect')
+        app.reconnect_notion=reconnect
+        async with app.run_test(size=(145,55)) as pilot:
+            await pilot.press('f6');await pilot.pause()
+            app.query_one('#reconnect-notion').scroll_visible()
+            await pilot.pause();await pilot.click('#reconnect-notion');await pilot.pause()
+            assert calls==[]
+            await pilot.click('#no');await pilot.pause();assert calls==[]
+            await pilot.click('#reconnect-notion');await pilot.pause()
+            await pilot.click('#yes');await pilot.pause();assert calls==['reconnect']
+        store.close()
+    asyncio.run(check())
+
+
+def test_interactive_signin_uses_child_with_exact_profile_and_no_nested_dispatch(tmp_path,monkeypatch):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    import sys
+    from fnv_relay import tui
+    store=make_store(tmp_path);calls=[]
+    app=RelayApp(store,lambda _:(_ for _ in ()).throw(AssertionError('No nested dispatch')),worker=FakeWorker())
+    monkeypatch.setattr(app,'suspend',lambda:nullcontext())
+    monkeypatch.setattr(tui.subprocess,'run',lambda args,check:calls.append(args) or SimpleNamespace(returncode=0))
+    monkeypatch.setattr('builtins.input',lambda _: '')
+    assert app.interactive_command(['auth','notion','connect'])==0
+    assert calls==[[sys.executable,'-u','-m','fnv_relay.cli','--state-dir',str(store.root),'auth','notion','connect']]
+    store.close()

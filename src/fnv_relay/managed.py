@@ -48,7 +48,9 @@ class MenuWorker:
             if self.running():
                 self.show('Relay already running. This menu can manage its lanes and stop it on exit.')
                 return
-            if self.store.pending_operations():
+            from .guidance import recoverable
+            recoverable_keys={op['key'] for op in recoverable(self.store)}
+            if any(op['key'] not in recoverable_keys for op in self.store.pending_operations()):
                 self.show('Finish incomplete lane setup with Add lane, or reconcile unresolved operations before starting.')
                 return
             owner = process_identity()

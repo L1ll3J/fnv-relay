@@ -451,10 +451,15 @@ def serve(store, once=False, order=None, menu_owner=None):
     with store.lock("serve"), account_lock(store.secrets().get("fnv_api_key", "")):
         if menu_owner is not None and (not owner_alive(menu_owner) or store.get('shutdown_requested')):
             return stop_unstarted_worker(store,project)
-        if store.pending_operations():
-            raise UncertainOperation("Reconciliation required")
         stopping = lambda: event.is_set() or menu_owner is not None and not owner_alive(menu_owner)
         engine = Engine(store, project, notion, should_stop=stopping)
+        from .guidance import publication, recoverable
+        recoverable_keys={op['key'] for op in recoverable(store)}
+        for lane in store.lanes():
+            if lane.get('landing') and publication(lane)[0] in recoverable_keys:
+                engine.ensure_work_guidance(lane)
+        if store.pending_operations():
+            raise UncertainOperation("Reconciliation required")
         selected,apply_order = preferences.start_order(store,order)
         if apply_order:
             for row in store.lanes():
@@ -650,7 +655,7 @@ def main(argv=None):
         if isinstance(exc, ProjectError) and exc.status == 401:
             print("FNV authentication failed. Run fnv-relay auth fnv connect, or auth fnv login with a current key.", file=sys.stderr)
         elif isinstance(exc, NotionError) and exc.status == 401:
-            print("Notion sign-in expired. Stop the relay, then run auth notion connect using the same state directory and workspace.", file=sys.stderr)
+            print("Notion sign-in expired. Use Reconnect Notion in Settings & help, or stop the relay and run ./relay auth notion connect using the same workspace.", file=sys.stderr)
         elif isinstance(exc, NotionError) and exc.status == 403:
             if store.config().get("notion_transport") == "mcp":
                 print("Notion access was refused. Check the authorized workspace, page permissions and workspace limits.", file=sys.stderr)

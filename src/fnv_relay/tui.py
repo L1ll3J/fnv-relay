@@ -5,6 +5,7 @@ import asyncio
 from datetime import datetime, timezone
 import json
 import signal
+import subprocess
 import sys
 import uuid
 
@@ -172,6 +173,7 @@ class RelayApp(App):
                     with Horizontal(classes='buttons'):
                         yield Button('Readiness check',id='doctor')
                         yield Button('Account setup',id='setup')
+                        yield Button('Reconnect Notion',id='reconnect-notion',variant='primary')
         yield Static('',id='notice',markup=False)
         yield Footer()
 
@@ -328,7 +330,9 @@ class RelayApp(App):
             self.notice(text or ('Action completed.' if process.returncode==0 else 'Action failed; check Activity.'))
             if process.returncode:self.notify(text or 'Action failed.',severity='error')
             elif exit_after:self.exit(0)
-        except (OSError,ValueError) as error:self.notice(type(error).__name__+': '+str(error))
+            return process.returncode == 0
+        except (OSError,ValueError) as error:
+            self.notice(type(error).__name__+': '+str(error));return False
         finally:self.busy=False;self.refresh_data()
 
     def launch_command(self,args):
@@ -340,10 +344,41 @@ class RelayApp(App):
         if not self.worker.running() and not any(x.get('lease') for x in self.store.lanes()) and not self.store.pending_operations():
             if exit_after:self.exit(0)
             else:self.notice('Relay is stopped. Saved work is preserved.')
-            return
+            return True
         process=getattr(self.worker,'process',None)
         if process is not None and process.poll() is None:process.send_signal(signal.SIGTERM)
-        await self.command(['stop','--timeout','30'],exit_after=exit_after)
+        return await self.command(['stop','--timeout','30'],exit_after=exit_after)
+
+    def interactive_command(self,args):
+        # Browser OAuth owns an asyncio loop in its child, outside Textual's loop.
+        with self.suspend():
+            try:
+                result=subprocess.run([sys.executable,'-u','-m','fnv_relay.cli','--state-dir',str(self.store.root),*args],check=False)
+                code=result.returncode
+            except KeyboardInterrupt:code=130
+            except OSError:
+                print('Could not open account sign-in. Saved work and connection settings are preserved.')
+                code=1
+            try:input('Press Enter to return to FNV Relay: ')
+            except (KeyboardInterrupt,EOFError):pass
+        return code
+
+    async def reconnect_notion(self):
+        if self.busy:self.notice('Wait for the current action to finish.');return
+        restart=self.worker.running()
+        if not await self.stop_worker():
+            self.notice('Notion sign-in was not opened: shutdown or claim reconciliation still needs attention.');return
+        if self.worker.running() or any(row.get('lease') for row in self.store.lanes()):
+            self.notice('The relay is still stopping. Reconnect Notion once shutdown completes.');return
+        self.busy=True
+        try:
+            code=self.interactive_command(['auth','notion','connect'])
+            if code:
+                self.notice('Notion sign-in did not complete. Saved work is preserved; relay remains stopped.');return
+            if restart:
+                self.worker.start();self.notice('Notion reconnected. Relay restarting with saved work.')
+            else:self.notice('Notion reconnected. Choose Start relay when ready.')
+        finally:self.busy=False;self.refresh_data()
 
     async def action_quit(self):await self.stop_worker(exit_after=True)
 
@@ -396,6 +431,9 @@ class RelayApp(App):
             if value is Select.NULL:self.notice('Choose saved work first.');return
             self.launch_command(['lane','resume',self.selected]+(['--address',value] if value!='current' else []))
         elif action=='doctor':self.launch_command(['doctor'])
+        elif action=='reconnect-notion':
+            if self.busy:self.notice('Wait for the current action to finish.');return
+            self.push_screen(ConfirmScreen('Reconnect Notion for this profile? The relay will stop safely and preserve unfinished work before browser sign-in. Choose the existing workspace. After successful sign-in, a previously running relay restarts; otherwise it stays stopped.'),lambda yes:self.run_worker(self.reconnect_notion(),exit_on_error=False) if yes else None)
         elif action=='setup':
             if self.busy or self.worker.running():self.notice('Stop the relay before account setup.');return
             with self.suspend():self.dispatch(['setup'])

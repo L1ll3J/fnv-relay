@@ -131,7 +131,7 @@ class LoopbackCallback:
     async def wait(self):
         sdk = _sdk()
         ready = await sdk['anyio'].to_thread.run_sync(lambda:self.event.wait(self.timeout), abandon_on_cancel=True)
-        if not ready: raise OAuthError('Notion sign-in timed out. Run auth notion connect again when ready.')
+        if not ready: raise OAuthError('Notion sign-in timed out. Use Reconnect Notion in Settings & help, or run ./relay auth notion connect after stopping the relay.')
         if self.failure or self.result is None: raise OAuthError('Notion sign-in was declined. No connection settings changed.')
         return sdk['AuthorizationCodeResult'](**self.result)
 
@@ -141,7 +141,7 @@ def provider(storage, *, callback=None, show=print, open_browser=webbrowser.open
     registered = storage.data.get('client', {}).get('redirect_uris', [])
     redirect_uri = callback.redirect_uri if callback else registered[0] if registered else 'http://127.0.0.1:1/oauth/callback'
     async def redirect(url):
-        if callback is None: raise OAuthError('Notion sign-in needs attention. Run auth notion connect; browser sign-in is never started by background work.')
+        if callback is None: raise OAuthError('Notion sign-in needs attention. Use Reconnect Notion in Settings & help; browser sign-in is never started by background work.')
         if not official_url(url): raise OAuthError('Notion returned an unsupported sign-in URL.')
         query = parse_qs(urlsplit(url).query)
         if len(query.get('state', [])) != 1 or query.get('code_challenge_method') != ['S256'] or len(query.get('code_challenge', [])) != 1:
@@ -157,7 +157,7 @@ def provider(storage, *, callback=None, show=print, open_browser=webbrowser.open
         # Some text-browser launchers block until the browser exits; never block OAuth on them.
         threading.Thread(target=launch,daemon=True).start()
     async def forbidden_callback():
-        raise OAuthError('Notion sign-in requires auth notion connect.')
+        raise OAuthError('Use Reconnect Notion in Settings & help, or run ./relay auth notion connect after stopping the relay.')
     metadata = sdk['OAuthClientMetadata'](client_name='fnv-relay', redirect_uris=[redirect_uri], grant_types=['authorization_code','refresh_token'], response_types=['code'], token_endpoint_auth_method='none', scope='default')
     auth=sdk['OAuthClientProvider'](server_url=SERVER, client_metadata=metadata, storage=storage, redirect_handler=redirect, callback_handler=callback.wait if callback else forbidden_callback)
     # SDK2.3 restores token objects but not their expiry clock in _initialize().
@@ -208,7 +208,7 @@ class SDKCaller:
             with self.store.lock('notion-oauth-session', timeout=min(self.timeout,30)):
                 acquired = True
                 storage = TokenStorage(self.store)
-                if not storage.data.get('tokens'): raise OAuthError('Notion is not connected. Run auth notion connect.')
+                if not storage.data.get('tokens'): raise OAuthError('Notion is not connected. Use Reconnect Notion in Settings & help, or run ./relay auth notion connect after stopping the relay.')
                 try:
                     return asyncio.run(sdk_call(provider(storage), name, arguments, timeout=self.timeout))
                 except (OAuthError,NotionError): raise
@@ -252,12 +252,15 @@ def connect(store, *, show=print, open_browser=webbrowser.open, timeout=300, _ca
 
         except OAuthError: raise
         except Exception:
-            raise OAuthError('Notion sign-in failed. No connection settings changed; run auth notion connect again.') from None
+            raise OAuthError('Notion sign-in failed. No connection settings changed; use Reconnect Notion in Settings & help, or run ./relay auth notion connect after stopping the relay.') from None
         config = store.config()
         if config.get('notion_workspace_id') != workspace['id']:
             config.pop('notion_parent_page', None)
         store.set_secret(SECRET_NAME, storage.data)
         config.update(notion_transport='mcp', notion_workspace_id=workspace['id'])
         store.set_config(config)
+        for lane in lanes:
+            if (store.get('last_error:'+lane['route_token']) or {}).get('type') == 'OAuthError':
+                store.set('last_error:'+lane['route_token'],None)
         show('Notion browser connection saved privately.')
         return {'workspace':{'id':workspace['id'], 'name':workspace.get('name','')}, 'user':{'id':user['id'], 'name':user.get('name',''), 'type':user.get('type','person')}}

@@ -16,7 +16,7 @@ import uuid
 from .store import Store, AlreadyRunning, UncertainOperation, write_json
 from .project import ProjectError
 from .lifecycle import process_identity, owner_alive
-from . import compiler, context
+from . import compiler, context, guidance
 
 PROTOCOL = 'fnv-relay/2'
 BANDS = ['<=255', '256-511', '512-1K', '1K-4K', '4K+']
@@ -215,6 +215,16 @@ class Engine:
         if len(matches) > 1: raise UncertainOperation('Multiple matching lane pages need review')
         return bool(matches), matches[0] if matches else None
 
+    def ensure_work_guidance(self, lane, *, retry_missing=False):
+        key,args=guidance.publication(lane)
+        if self.store.get('guidance-confirmed:'+key):return
+        record=args['record']
+        self.setup_operation(key,args,lambda:self.notion.append(lane['landing'],record),
+                             lambda:(record in self.notion.messages(lane['landing']),None),retry_missing)
+        if record not in self.notion.messages(lane['landing']):raise RuntimeError('Work guidance readback failed')
+        self.store.set('guidance-confirmed:'+key,True)
+        self.store.event('work_guidance_published',{'route_token':lane['route_token'],'record_sha256':sha(canonical(record))})
+
     def finish_lane_setup(self, lane, *, retry_missing=False):
         if lane.get('state') != 'setup': raise ValueError('Lane setup is already complete')
         token, label, policy = lane['route_token'],lane['label'],lane['policy']
@@ -234,6 +244,7 @@ class Engine:
                         'candidate_delivery': 'Create CANDIDATE pages under data, then post BATCH with candidates:[{candidate_id,page}]. Copy exact route/claim_id/pack_sha256 from ASSIGNED. Complete source or invertible literal_edits against a delivered source_sha256. See assignment schema.'}
         self.setup_operation('landing:'+token, introduction, lambda:self.notion.append(lane['landing'],introduction), lambda:(introduction in self.notion.messages(lane['landing']),None),retry_missing)
         if introduction not in self.notion.messages(lane['landing']): raise RuntimeError('Landing readback failed')
+        self.ensure_work_guidance(lane,retry_missing=retry_missing)
         lane['state'] = 'waiting_hello'; self.store.put_lane(lane); return lane
 
     def guard(self, status, claim_id=None):
@@ -805,6 +816,7 @@ class Engine:
                 self.refresh(lane)
                 self.publish_closed_leases(lane)
                 if lane['state'] in ('setup','claim_intent','preparing','closed_requires_reconciliation') or lane.get('paused'): continue
+                self.ensure_work_guidance(lane)
                 for message in self.notion.messages(lane['inbox']):
                     if self.stop_requested(): break
                     if self.store.get('lane_control:'+lane['route_token']): break
