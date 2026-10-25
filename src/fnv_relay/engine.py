@@ -16,7 +16,7 @@ import uuid
 from .store import Store, AlreadyRunning, UncertainOperation, write_json
 from .project import ProjectError
 from .lifecycle import process_identity, owner_alive
-from . import compiler, context, guidance, attempts
+from . import compiler, context, guidance, attempts, official_tools
 
 PROTOCOL = 'fnv-relay/2'
 BANDS = ['<=255', '256-511', '512-1K', '1K-4K', '4K+']
@@ -258,8 +258,11 @@ class Engine:
         if self.store.get('policy_miss:'+lane['route_token']) == sha(canonical(policy)): return None
         limits = status['limits']; own = [c for c in status['open_claims'] if c.get('this_key')]
         if len(status['open_claims']) >= limits['claims'] or status['submissions_today'] + len(own) >= limits['subsPerDay'] or status['awaiting_verification'] + len(own) >= limits['pending']: return None
-        parked_addresses = {x['continuation']['address'].lower() for x in lane.get('parked',[])}
-        if policy.get('address') and policy['address'].lower() not in parked_addresses and not attempts.capped(self.store,lane,policy['address']): return {'address': policy['address'], 'context_mode': 'resume'}
+        parked_addresses = {x['continuation']['address'].lower() for x in lane.get('parked',[]) if x.get('reason') != 'function_paused'}
+        if policy.get('address') and policy['address'].lower() not in parked_addresses and not attempts.capped(self.store,lane,policy['address']):
+            paused_history = any(x.get('reason')=='function_paused' and x['continuation']['address'].lower()==policy['address'].lower() for x in lane.get('parked',[]))
+            if not paused_history or self.project.call('function_info', {'address':policy['address']}).get('state','').split(' ',1)[0].lower() == 'open':
+                return {'address': policy['address'], 'context_mode': 'resume'}
         # Random selection shuffles size bands; the service chooses within a band.
         available = {r['band']: r for r in self.project.call('list_bands', {})['bands']}
         order = policy.get('order', 'largest')
@@ -357,6 +360,8 @@ class Engine:
                     resume = None
             args = {'address': resume['address'], 'context_mode': 'resume'} if resume else self.select(lane, status)
             if args is None or self.admission_blocked(): return
+            official_tools.current(self.store, self.project, self.config['paths'], now=self.clock())
+            if self.admission_blocked(): return
             lane['claim_selection'] = dict(args)
             lane['sequence'] += 1; lane['state'] = 'claim_intent'; lane['claim_owner']=self.owner; self.store.put_lane(lane)
             op = 'claim:' + lane['route_token'] + ':' + str(lane['sequence'])
@@ -435,17 +440,18 @@ class Engine:
             if isinstance(code,str) and 0 < len(code.encode()) <= self.config.get('max_candidate_bytes',1048576):
                 sources = directory/'sources'; sources.mkdir(exist_ok=True); raw = code.encode(); source = sources/(sha(raw)+'.cpp')
                 if not source.exists(): source.write_bytes(raw)
-        if self.config['paths'].get('compiler_tips'): files.append(Path(self.config['paths']['compiler_tips']))
+        paths = self.tool_paths(lane)
+        if paths.get('compiler_tips'): files.append(Path(paths['compiler_tips']))
         self.continuation_context(lane, directory, files)
         if not self.preparing_current(lane, cid): return
-        files.append(context.export(self.config['paths'], directory/'pack', directory/'context'))
+        files.append(context.export(paths, directory/'pack', directory/'context'))
         if not self.preparing_current(lane, cid): return
         pages = self.upload(lane, cid, files, preparing=True)
         if not self.preparing_current(lane, cid): return
         scope = {'route_token': lane['route_token'], 'claim_id': cid, 'pack_sha256': lease['pack_sha256']}
         schema = {'protocol': PROTOCOL, 'kind': 'CANDIDATE', 'sender': 'chatgpt', **scope, 'candidate_id': 'UNIQUE_CANDIDATE', 'files': [{'filename': 'candidate.cpp', 'source_utf8': 'COMPLETE_SOURCE', 'source_sha256': 'SHA256', 'source_bytes': 0}]}
         batch = {'protocol': PROTOCOL, 'kind': 'BATCH', 'sender': 'chatgpt', 'message_id': 'UNIQUE_MESSAGE', **scope, 'candidates': [{'candidate_id': 'UNIQUE_CANDIDATE', 'page': 'NOTION_PAGE_UUID'}]}
-        self.publish(lane, key, {'next_action':dict(NEXT_ACTION), 'status': 'ASSIGNED', 'scope': scope, 'lease': lease, 'pages': pages, 'candidate_schema': schema, 'batch_schema': batch, 'source_limit_bytes': self.config.get('max_candidate_bytes', 1048576), 'instructions': 'Match the complete assigned function using original pack/types/flags. Use named-field C++, no asm/naked/raw-byte or absolute-address tricks. Save complete sources as CANDIDATE JSON pages. Batches may contain 1–8 distinct candidates. Three or four are encouraged when useful for efficient comparison; a single targeted candidate is valid. A MATCH still needs independent plain validation. Only controller submits using the owner API key. Do not send commands or credentials. Stop new candidates before expiry minus14minutes. Ask REQUEST for small missing context. The local controller manages claim release and continuation. Report suspected defects with DEFECT_PROPOSAL; these queue for review and never automatically flag solely on your assertion. For source>24k characters use parts:[{page,part_index,chunk_sha256}] instead ofsource_utf8; eachpage haskindSOURCE_CHUNK andsameclaim/pack/route/candidate scope, source_utf8 andpart_index. Whole sourceSHA/bytes are required on CANDIDATE file.'})
+        self.publish(lane, key, {'next_action':dict(NEXT_ACTION), 'status': 'ASSIGNED', 'scope': scope, 'lease': lease, 'pages': pages, 'candidate_schema': schema, 'batch_schema': batch, 'source_limit_bytes': self.config.get('max_candidate_bytes', 1048576), 'instructions': 'Match the complete assigned function using original pack/types/flags. Use named-field C++, no asm/naked/raw-byte or absolute-address tricks. Save complete sources as CANDIDATE JSON pages. Batches may contain 1–8 distinct candidates. Three or four are encouraged when useful for efficient comparison; a single targeted candidate is valid. A MATCH still needs independent plain validation. Only controller submits using the owner API key. Do not send commands or credentials. Stop new candidates before expiry minus14minutes. REQUEST supports only request:{kind:"best_candidate"}, request:{kind:"candidate_artifacts",source_sha256:"SHA256"}, or request:{kind:"target"}. The relay does not answer free-form questions or status requests; read results from the outbox and raise bespoke questions or blockers in the chat. The local controller manages claim release and continuation. Report suspected defects in the chat. A DEFECT_PROPOSAL record is saved as evidence only; it does not notify a human or agent, receive a bespoke reply, or automatically flag the function. For source>24k characters use parts:[{page,part_index,chunk_sha256}] instead ofsource_utf8; eachpage haskindSOURCE_CHUNK andsameclaim/pack/route/candidate scope, source_utf8 andpart_index. Whole sourceSHA/bytes are required on CANDIDATE file.'})
         with self.lane_lock(lane['route_token']):
             if not self.preparing_current(lane, cid): return
             lane['state'] = 'assigned'; lane.pop('resume', None); lane.pop('preparation_retry_at', None); self.store.put_lane(lane)
@@ -458,6 +464,13 @@ class Engine:
             if self.stop_requested():
                 self.release(lane, 'Controller stopped during assignment preparation'); return False
             return True
+
+    def tool_paths(self, lane):
+        paths, snapshot = official_tools.for_target(self.store, self.project, self.config['paths'], lane['lease'], now=self.clock())
+        if snapshot and lane['lease'].get('tool_snapshot') != snapshot:
+            lane['lease']['tool_snapshot'] = snapshot
+            self.store.put_lane(lane)
+        return paths
 
     def continuation_context(self, lane, directory, files):
         continuation = lane.get('resume')
@@ -575,6 +588,7 @@ class Engine:
             if (self.store.get('last_error:'+lane['route_token']) or {}).get('message') == str(error):
                 self.store.set('last_error:'+lane['route_token'], None)
             return
+        paths = self.tool_paths(lane)
         if not attempts.reserve(self,lane,publication,identity):
             self.store.set('batch-result:'+publication,{'status':'BATCH_REJECTED','reason_code':'attempt_limit','checks_performed':0})
             attempts.tick(self,lane)
@@ -590,7 +604,9 @@ class Engine:
                     self.guard(self.project.call('status', {}), lease['claim_id'])
                     if self.stop_requested() or self.clock()+840 >= epoch(lease['expires']): break
                     if sha((directory/'pack.tar.gz').read_bytes()) != lease['pack_sha256']: raise ValueError('Original pack changed')
-                    digest = sha(raw); key = 'check:' + lease['claim_id'] + ':' + digest
+                    digest = sha(raw); base_key = 'check:' + lease['claim_id'] + ':' + digest
+                    snapshot_id = (lane['lease'].get('tool_snapshot') or {}).get('id')
+                    key = base_key+':tools:'+snapshot_id if snapshot_id else base_key
                     previous = self.store.get(key)
                     if previous:
                         if previous['state'] != 'complete': raise RuntimeError('Incomplete check reservation requires reconciliation; no replay')
@@ -598,15 +614,23 @@ class Engine:
                     source = directory/'sources'/(digest+'.cpp')
                     if source.exists() and source.read_bytes() != raw: raise ValueError('Immutable candidate differs')
                     source.write_bytes(raw)
+                    # Retain the original cache entry when adopting generation-scoped results.
+                    if key != base_key and self.store.get(base_key) and not self.store.get(base_key+':legacy'):
+                        self.store.set(base_key+':legacy', self.store.get(base_key))
                     index = self.store.get('checks:' + lease['claim_id']) or 0; self.store.set('checks:' + lease['claim_id'], index+1)
                     work = directory/'checks'/str(index+1)
                     self.store.set(key, {'state': 'reserved', 'source_sha256': digest, 'work': str(work)})
-                    result = self.checker(self.config['paths'] | {'max_candidate_bytes': self.config.get('max_candidate_bytes', 1048576)}, directory/'pack', source, work)
+                    result = self.checker(paths | {'max_candidate_bytes': self.config.get('max_candidate_bytes', 1048576)}, directory/'pack', source, work)
+                    if snapshot_id: result['tool_snapshot_id'] = snapshot_id
                     if result.get('source_sha256') != digest: raise RuntimeError('Compiler source evidence differs')
                     compact = {k: value for k, value in result.items() if k != 'versions'} | {'candidate_id': cid, 'source_sha256': digest}
-                    write_json(directory/('result-'+digest+'.json'), result); self.store.set(key, {'state': 'complete', 'result': compact}); results.append(compact)
+                    suffix = '-'+snapshot_id if snapshot_id else ''
+                    write_json(directory/('result-'+digest+suffix+'.json'), result)
+                    self.store.set(key, {'state': 'complete', 'result': compact})
+                    if key != base_key: self.store.set(base_key, {'state':'complete', 'result':compact})
+                    results.append(compact)
                     self.record_best(lease, source, result)
-                    self.store.event('check_complete', {'route_token':lane['route_token'], 'check_index':index+1, 'claim_id': lease['claim_id'], 'source_sha256': digest, 'status': result['status']})
+                    self.store.event('check_complete', {'route_token':lane['route_token'], 'check_index':index+1, 'claim_id': lease['claim_id'], 'source_sha256': digest, 'check_key':key, 'status': result['status']})
             if self.stop_requested(): break
             if result['status'] == 'match' and result['exit_code'] == 0:
                 self.finalize(lane, source, digest); break
@@ -640,9 +664,10 @@ class Engine:
             if sha((directory/'pack.tar.gz').read_bytes()) != lease['pack_sha256'] or sha(source.read_bytes()) != digest: raise RuntimeError('Finalization inputs changed')
             final_key = 'finalize:' + lease['claim_id']
             if self.store.get(final_key): raise RuntimeError('Existing finalization intent; reconcile rather than replay')
+            paths = self.tool_paths(lane)
             self.store.set(final_key, {'state': 'independent_check', 'source_sha256': digest})
             snapshot = directory/'submission.cpp'; snapshot.write_bytes(source.read_bytes()); snapshot.chmod(0o400)
-            proof = self.checker(self.config['paths'], directory/'pack', snapshot, directory/'independent-plain', plain=True)
+            proof = self.checker(paths, directory/'pack', snapshot, directory/'independent-plain', plain=True)
             write_json(directory/'independent-proof.json', proof)
             if proof['exit_code'] != 0 or proof.get('standalone_match') is not True or proof['source_sha256'] != digest or sha(snapshot.read_bytes()) != digest: raise RuntimeError('Independent plain MATCH not established; no submission')
             if self.stop_requested(): return

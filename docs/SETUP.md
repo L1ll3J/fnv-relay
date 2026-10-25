@@ -200,6 +200,16 @@ In the full-screen app, use **Settings & help → Reconnect Notion** if Notion s
 
 Each lane landing page also receives the approved `/goal` work-style guidance, including concrete candidate attempts and 30-second Python waits within the active turn. The addition is versioned separately from registration instructions and confirmed by readback. Existing lanes receive it on their next successful relay poll after Notion access is available; new lanes include it during setup.
 
+### Official tool freshness
+
+Start downloads and validates the official checker archive, function index, symbols and compiler tips before accepting work. During task selection, the relay rechecks the official bundle after five minutes. Each validated generation is retained under the profile's private `official-tools` directory; configured compiler, game and Wine paths stay unchanged. A failed refresh blocks new claims rather than silently accepting work against stale data.
+
+Before assignment delivery and candidate compilation, the target address must exist in the selected official index. A missing address causes an immediate refresh. If it is still missing, the lane reports `TargetIndexUnavailable`, performs no candidate checks, and rechecks after a five-minute cooldown. Existing candidate evidence remains saved. This distinguishes an outdated local download from an address absent in the current official files.
+
+Assignments pin a validated generation for target export, diagnostic checks and independent plain validation. Downloading a new generation does not overwrite files used by active assignments. Check caches are scoped to that generation: an explicitly submitted new batch can check against updated tools without reusing an old-generation error, while repeated batches under the same generation reuse completed results. Refreshing data alone never replays compiler checks.
+
+FNV controls when project-paused functions return to its eligible pool. The relay retains their parked history without treating that pause as a permanent exclusion. Reopened functions remain subject to size, order, fresh-only and attempt-limit settings; operator-parked and capped work stay excluded.
+
 ### Optional batch-attempt limits
 
 In **Lane controls**, set **Batch attempt limit per function** and apply the settings. `0` turns the limit off (the default). The same option is available when adding a lane, or with `lane configure ROUTE --max-attempts N`. Overview shows **Attempts** as `used / limit` or `used / off`; Settings can hide this column.

@@ -46,7 +46,9 @@ class Dashboard:
                 data=event['data'];kind=event['kind'];claim=data.get('claim_id')
                 route=data.get('route_token') or self.claim_routes.get(claim)
                 if kind=='check_complete':
-                    record=self.store.get('check:'+claim+':'+data['source_sha256']) or {}
+                    key='check:'+claim+':'+data['source_sha256']
+                    record=self.store.get(data['check_key']) if data.get('check_key') else self.store.get(key+':legacy') or self.store.get(key)
+                    record=record or {}
                     if record.get('state')!='complete':continue
                     result=record['result'];values=metrics(result)
                     full=(result.get('diagnostics') or {}).get('full_extent_ndiff_insn')
