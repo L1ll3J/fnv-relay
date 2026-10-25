@@ -331,3 +331,47 @@ def test_bucket_order_controls_are_independent_and_new_lane_can_choose_bucket(tm
             assert worker.active and worker.calls==[]
         store.close()
     asyncio.run(check())
+
+
+def test_running_lane_settings_keep_typed_draft_across_table_rebuild_and_apply(tmp_path):
+    async def check():
+        store=make_store(tmp_path)
+        other=dict(store.lane('route-one'),route_token='route-two',label='Lane 2',policy={'order':'largest','allow_attempted':True,'max_attempts':7})
+        store.put_lane(other)
+        worker=FakeWorker();worker.active=True
+        app=RelayApp(store,lambda _:None,worker=worker)
+        async with app.run_test(size=(170,55)) as pilot:
+            await pilot.pause()
+            app.query_one('#lanes-table',DataTable).move_cursor(row=1)
+            await pilot.pause()
+            await pilot.press('f2');await pilot.pause()
+            field=app.query_one('#max-attempts',Input)
+            field.scroll_visible();await pilot.pause()
+            await pilot.click('#max-attempts')
+            await pilot.press('end','backspace','1','2')
+            app.query_one('#order',Select).value='smallest'
+            app.query_one('#band',Select).value='256-511'
+            app.query_one('#allow-attempted',Checkbox).value=False
+            # Rebuilding live columns previously reloaded saved values for the same lane.
+            app.settings['size']=False
+            app.refresh_data();await pilot.pause()
+            assert app.selected=='route-two'
+            assert field.value=='12'
+            assert app.query_one('#order',Select).value=='smallest'
+            assert app.query_one('#band',Select).value=='256-511'
+            assert not app.query_one('#allow-attempted',Checkbox).value
+            app.refresh_data();await pilot.pause()
+            assert field.value=='12'
+            calls=[];app.launch_command=calls.append
+            app.query_one('#apply-policy').scroll_visible();await pilot.pause()
+            await pilot.click('#apply-policy');await pilot.pause()
+            assert calls[0][calls[0].index('--max-attempts')+1]=='12'
+            assert store.lane('route-two')['policy']['max_attempts']==7
+            # Selecting a different lane discards the prior draft and loads saved settings.
+            app.query_one('#history-lane',Select).value='route-one';await pilot.pause()
+            assert field.value=='0'
+            assert app.query_one('#order',Select).value=='random'
+            app.query_one('#history-lane',Select).value='route-two';await pilot.pause()
+            assert field.value=='7'
+        store.close()
+    asyncio.run(check())

@@ -163,7 +163,7 @@ class RelayApp(App):
         self.store,self.dispatch=store,dispatch
         self.worker=worker or MenuWorker(store,dispatch,self.notice)
         self.model=Dashboard(store)
-        self.selected=None;self.busy=False;self.data=None;self.table_shape=None;self.route_options=None
+        self.selected=None;self.controls_route=None;self.busy=False;self.data=None;self.table_shape=None;self.route_options=None
         self.entries=presets.load(store);self.note_id=self.entries[0]['id'] if self.entries else None
         self.note_loading=False
         self.settings=store.get('terminal_display') or {'size':True,'lease':True,'checks':True,'attempts':True,'best':True,'stagnation':True,'policy':True,'metric':'ndiff_insn'}
@@ -271,25 +271,27 @@ class RelayApp(App):
         table=self.query_one('#lanes-table',DataTable)
         shape=(tuple(k for k,_ in columns),tuple(r['route_token'] for r in rows))
         changed=shape!=self.table_shape
-        if changed:
-            table.clear(columns=True)
-            for key,label in columns:table.add_column(label,key=key)
-        for row in rows:
-            progress=self.model.progress(row['route_token'],row['claim_id'],self.settings.get('metric','ndiff_insn'))
-            values={'label':row['label'],'state':{'assigned':'awaiting handoff' if row['awaiting_handoff'] else 'working','waiting_hello':'awaiting agent','resume_pending':'saved work ready'}.get(row['state'],row['state']),
-                    'address':row['address'],'size':str(row['size_bytes'] or '—'),'best':str(progress['best']) if progress['best'] is not None else '—',
-                    'checks':str(row['checks']),'attempts':str(row['attempts'])+(' / '+str(row['max_attempts']) if row['max_attempts'] else ' / off'),'since_checks':str(progress['checks_since_best']) if progress['checks_since_best'] is not None else '—',
-                    'since_time':progress['since_best'],'expires':clock(row['expires_at']),
-                    'policy':row['order']+' · '+dict((value,label) for label,value in preferences.BUCKETS).get(row['band'],row['band'])+(' · fresh' if not row['allow_attempted'] else ' · any'),
-                    'error':'change queued' if row['control_pending'] else 'handoff requested' if row['awaiting_handoff'] else 'waiting for eligible work' if row['attempt_pool_empty'] else 'waiting for fresh work' if row['waiting_fresh'] else row['error_type'] or '—'}
-            cells=[Text(values[key]) for key,_ in columns]
-            if changed:table.add_row(*cells,key=row['route_token'])
-            else:
-                for (key,_),value in zip(columns,cells):table.update_cell(row['route_token'],key,value)
-        self.table_shape=shape
-        if changed and self.selected:
-            table.move_cursor(row=next(i for i,x in enumerate(rows) if x['route_token']==self.selected))
-            self.load_lane_controls()
+        # Rebuilding rows emits transient highlights; these are not user lane changes.
+        with table.prevent(DataTable.RowHighlighted):
+            if changed:
+                table.clear(columns=True)
+                for key,label in columns:table.add_column(label,key=key)
+            for row in rows:
+                progress=self.model.progress(row['route_token'],row['claim_id'],self.settings.get('metric','ndiff_insn'))
+                values={'label':row['label'],'state':{'assigned':'awaiting handoff' if row['awaiting_handoff'] else 'working','waiting_hello':'awaiting agent','resume_pending':'saved work ready'}.get(row['state'],row['state']),
+                        'address':row['address'],'size':str(row['size_bytes'] or '—'),'best':str(progress['best']) if progress['best'] is not None else '—',
+                        'checks':str(row['checks']),'attempts':str(row['attempts'])+(' / '+str(row['max_attempts']) if row['max_attempts'] else ' / off'),'since_checks':str(progress['checks_since_best']) if progress['checks_since_best'] is not None else '—',
+                        'since_time':progress['since_best'],'expires':clock(row['expires_at']),
+                        'policy':row['order']+' · '+dict((value,label) for label,value in preferences.BUCKETS).get(row['band'],row['band'])+(' · fresh' if not row['allow_attempted'] else ' · any'),
+                        'error':'change queued' if row['control_pending'] else 'handoff requested' if row['awaiting_handoff'] else 'waiting for eligible work' if row['attempt_pool_empty'] else 'waiting for fresh work' if row['waiting_fresh'] else row['error_type'] or '—'}
+                cells=[Text(values[key]) for key,_ in columns]
+                if changed:table.add_row(*cells,key=row['route_token'])
+                else:
+                    for (key,_),value in zip(columns,cells):table.update_cell(row['route_token'],key,value)
+            self.table_shape=shape
+            if changed and self.selected:
+                table.move_cursor(row=next(i for i,x in enumerate(rows) if x['route_token']==self.selected))
+                self.load_lane_controls()
         options=tuple((r['label'],r['route_token']) for r in rows)
         if options!=self.route_options:
             self.query_one('#history-lane',Select).set_options(options)
@@ -326,10 +328,13 @@ class RelayApp(App):
         if not self.selected:return
         lane=self.store.lane(self.selected);policy=lane.get('policy',{})
         self.query_one('#policy-info',Static).update(Text(lane.get('label','Lane')+' · '+self.selected))
-        self.query_one('#order',Select).value=policy.get('order','largest')
-        self.query_one('#band',Select).value=policy.get('band','any')
-        self.query_one('#allow-attempted',Checkbox).value=policy.get('allow_attempted',True)
-        self.query_one('#max-attempts',Input).value=str(policy.get('max_attempts') or 0)
+        # Live table/selector refreshes must not overwrite this lane's unsaved edits.
+        if self.controls_route != self.selected:
+            self.query_one('#order',Select).value=policy.get('order','largest')
+            self.query_one('#band',Select).value=policy.get('band','any')
+            self.query_one('#allow-attempted',Checkbox).value=policy.get('allow_attempted',True)
+            self.query_one('#max-attempts',Input).value=str(policy.get('max_attempts') or 0)
+            self.controls_route=self.selected
         saved=[('Continue current saved work','current')]
         saved += [(x['continuation']['address']+' · '+x['reason'],x['continuation']['address']) for x in lane.get('parked',[])]
         self.query_one('#saved-work',Select).set_options(saved)
