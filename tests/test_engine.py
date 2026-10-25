@@ -485,3 +485,34 @@ def test_pre_send_busy_can_resume_same_lane_without_uncertain_retry(env,monkeypa
     assert env.store.pending_operations()==[]
     ready=env.engine.finish_lane_setup(pending)
     assert ready['state']=='waiting_hello'
+
+
+@pytest.mark.parametrize('mode', ['available', 'historical', 'tampered', 'missing'])
+def test_candidate_artifacts_reports_availability_without_recompilation(env, mode):
+    current = assign(env)
+    directory = Path(current['lease']['directory'])
+    raw = b'int target(){return 41;}'
+    digest = sha(raw)
+    source = directory/'sources'/(digest+'.cpp')
+    source.parent.mkdir(exist_ok=True)
+    source.write_bytes(raw)
+    if mode != 'missing':
+        result = {'source_sha256':digest}
+        if mode != 'historical':
+            report = directory/'full-normalized.txt'
+            report.write_text('ORIG ret\nYOURS nop\n')
+            result.update(diagnostics={'status':'available', 'candidate_bytes':5000},
+                          diagnostic_artifacts=[{'path':str(report), 'sha256':sha(report.read_bytes())}])
+            if mode == 'tampered': report.write_text('changed')
+        env.store.set('check:'+current['lease']['claim_id']+':'+digest, {'state':'complete','result':result})
+    env.notion.append(current['inbox'], message(env, 'REQUEST', 'evidence-request', request={'kind':'candidate_artifacts','source_sha256':digest}))
+    env.engine.poll()
+    payload = next(row['payload'] for row in env.notion.messages(current['outbox']) if row.get('payload',{}).get('status') == 'REQUEST_CONTEXT')
+    assert env.checker.calls == []
+    if mode == 'available':
+        assert payload['diagnostics']['status'] == 'available'
+        texts = [env.notion.messages(ref['page'])[0]['source_utf8'] for ref in payload['pages']]
+        assert 'ORIG ret\nYOURS nop\n' in texts
+    else:
+        assert payload['diagnostics']['reason_code'] == {'historical':'not_captured','tampered':'invalid_saved_evidence','missing':'no_completed_check'}[mode]
+    assert env.store.get('message:'+env.route+':evidence-request')

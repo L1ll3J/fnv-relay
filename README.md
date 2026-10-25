@@ -56,3 +56,6 @@ Claims and project credit belong to your FNV account. Credentials and local work
 Do not publish state directories, private page links, tokens, context packs, candidate source, game files, compiler binaries, or debug traces as part of this package. Follow the [FNV contributor terms](https://fnvdecomp.com/legal.html) and official agent rules. This package's MIT license covers its own code only; it does not license the game, Microsoft compiler, checker, or project context.
 
 Official setup references were checked on 2026-10-24. Follow current upstream instructions when they change.
+
+
+New diagnostic checks retain the selected compiled object locally and attach a compact, source-bound evidence summary to each result. `candidate_artifacts` requests include full relocation-normalized target/candidate disassembly, aligned differences, region ranges and relocation bindings. Reports use the full candidate extent (up to 256 KiB), separately labeled from the official checker's limited-window metric, and add no compiler invocations. Derived relocation bindings are checker assumptions, not independent semantic proof. Binary objects remain local. Older checks without captured objects return an explicit unavailable reason; requesting evidence never recompiles. Independent plain MATCH validation remains unchanged.

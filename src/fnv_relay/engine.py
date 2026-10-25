@@ -719,6 +719,7 @@ class Engine:
 
     def request(self, lane, message):
         request = message.get('request', {}); lease = lane['lease']; directory = Path(lease['directory']); files = []
+        diagnostics = None
         reason = None
         if not isinstance(request, dict):
             reason = 'request_must_be_object'
@@ -744,8 +745,19 @@ class Engine:
         elif request.get('kind') == 'candidate_artifacts':
             digest = request.get('source_sha256')
             record = self.store.get('check:'+lease['claim_id']+':'+digest)
+            diagnostics = {'status':'unavailable', 'reason_code':'no_completed_check', 'additional_compiler_invocations':0}
             if record and record.get('state')=='complete':
-                files.append(directory/'sources'/(digest+'.cpp'))
+                diagnostics = record['result'].get('diagnostics') or {'status':'unavailable', 'reason_code':'not_captured', 'additional_compiler_invocations':0}
+                source = directory/'sources'/(digest+'.cpp')
+                if sha(source.read_bytes()) != digest: raise ValueError('Artifact source binding differs')
+                files.append(source)
+                for artifact in record['result'].get('diagnostic_artifacts', []):
+                    path = Path(artifact['path']).resolve()
+                    if not path.is_relative_to(directory.resolve()) or not path.is_file() or sha(path.read_bytes()) != artifact['sha256']:
+                        diagnostics = {'status':'unavailable', 'reason_code':'invalid_saved_evidence', 'additional_compiler_invocations':0}
+                        break
+                else:
+                    files.extend(Path(artifact['path']) for artifact in record['result'].get('diagnostic_artifacts', []))
                 for field in ('log_path','stderr_path'):
                     value = record['result'].get(field)
                     if value:
@@ -757,7 +769,9 @@ class Engine:
         else:
             self.publish(lane,'request:'+lease['claim_id']+':'+message['message_id'], {'status':'REQUEST_UNSUPPORTED','supported':['best_candidate','candidate_artifacts','target']}); return
         pages = self.upload(lane,lease['claim_id'],files)
-        self.publish(lane,'request:'+lease['claim_id']+':'+message['message_id'],{'status':'REQUEST_CONTEXT','pages':pages,'scope':{'claim_id':lease['claim_id'],'pack_sha256':lease['pack_sha256']}})
+        response = {'status':'REQUEST_CONTEXT','pages':pages,'scope':{'claim_id':lease['claim_id'],'pack_sha256':lease['pack_sha256']}}
+        if diagnostics is not None: response['diagnostics'] = diagnostics
+        self.publish(lane,'request:'+lease['claim_id']+':'+message['message_id'],response)
 
     def poll(self):
         for lane in self.store.lanes():
