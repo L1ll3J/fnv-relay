@@ -536,7 +536,16 @@ class Engine:
             base = f['base_source_sha256']
             if not isinstance(base,str) or not re.fullmatch('[0-9a-f]{64}',base): raise ValueError('Invalid base source digest')
             source = self.store.root/'claims'/lane['lease']['claim_id']/'sources'/(base+'.cpp')
-            raw = source.read_bytes()
+            try: raw = source.read_bytes()
+            except FileNotFoundError:
+                pack = (Path(lane['lease']['directory'])/'pack').resolve()
+                manifest = json.loads((pack/'pack.json').read_text())
+                name = manifest.get('source')
+                if not isinstance(name,str) or not name: raise ValueError('Patch base is unavailable')
+                original_source = (pack/name).resolve()
+                if not original_source.is_relative_to(pack): raise ValueError('Patch base escaped pack')
+                try: raw = original_source.read_bytes()
+                except FileNotFoundError: raise ValueError('Patch base is unavailable') from None
             if sha(raw) != base: raise ValueError('Patch base hash differs')
             edits = f['literal_edits']
             if not isinstance(edits, list) or not 1 <= len(edits) <= 16: raise ValueError('Invalid edit count')
