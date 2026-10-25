@@ -37,7 +37,8 @@ def parser():
     root.add_argument("--state-dir", default=DEFAULT_STATE)
     commands = root.add_subparsers(dest="command")
     root.set_defaults(command="menu")
-    commands.add_parser("menu", help="Open the interactive numbered menu")
+    commands.add_parser("menu", help="Open the full-screen terminal application")
+    commands.add_parser("text-menu", help="Use the legacy numbered menu")
     init = commands.add_parser("init", help="Initialize private local state")
     init.add_argument("--state-dir", default=argparse.SUPPRESS)
     commands.add_parser("setup", help="Guided account and private Notion page setup")
@@ -64,12 +65,19 @@ def parser():
     create.add_argument("--parent-page", help="Default: parent saved by setup")
     create.add_argument("--auto-resume", action=argparse.BooleanOptionalAction, default=True, help="Continue unfinished function after release when agent activity is recent")
     create.add_argument("--order", choices=preferences.ORDERS, help="Default: task order saved during setup")
+    create.add_argument("--allow-attempted", action=argparse.BooleanOptionalAction, default=None, help="Allow previously attempted functions in new selections")
     create.add_argument("--band", choices=BANDS)
     create.add_argument("--address")
     create.add_argument("--min-bytes", type=int, default=0)
     create.add_argument("--max-bytes", type=int, default=2**31 - 1)
     create.add_argument("--label", default="Pro lane")
     create.add_argument("--model-label", default="ChatGPT Web via Notion", help="Human-confirmed model attribution; otherwise use the truthful route label")
+    settings = lane.add_parser("configure", help="Change future selection; optionally park current work and switch now")
+    settings.add_argument("route")
+    settings.add_argument("--order", choices=preferences.ORDERS)
+    settings.add_argument("--allow-attempted", action=argparse.BooleanOptionalAction, default=None)
+    settings.add_argument("--paused", action=argparse.BooleanOptionalAction, default=None, help="Pause or unpause future selections")
+    settings.add_argument("--switch-now", action="store_true", help="Release and preserve current work, then select a different task")
     recover = lane.add_parser("recover", help="Finish an incomplete lane setup using Notion readback")
     recover.add_argument("route")
     recover.add_argument("--retry-missing", action="store_true", help="Authorize a fresh attempt only after readback finds no matching page")
@@ -119,6 +127,8 @@ def policy(args):
     if not args.model_label.strip() or len(args.model_label) > 100 or any(ord(c) < 32 for c in args.model_label):
         raise ValueError("Invalid model label")
     result = {"model_label": args.model_label.strip(), "order": args.order, "min_bytes": args.min_bytes, "max_bytes": args.max_bytes, "auto_resume_unfinished": args.auto_resume}
+    if getattr(args,"allow_attempted",None) is not None:
+        result["allow_attempted"] = args.allow_attempted
     if args.band:
         result["band"] = args.band
     if args.address:
@@ -242,7 +252,22 @@ def summary(lane):
 
 
 def lane_command(store, args):
-    if args.lane_action == "list":
+    if args.lane_action == "configure":
+        from .lane_policy import configure as configure_lane
+        lane = presentation.resolve_lane(store,args.route)
+        project = FNV(store.secrets().get('fnv_api_key','')) if args.switch_now and lane.get('lease') else None
+        engine = Engine(store,project,None,watchdog=False)
+        options=dict(order=args.order,allow_attempted=args.allow_attempted,switch_now=args.switch_now,paused=args.paused)
+        try:
+            with store.lock('serve'):
+                lane=configure_lane(engine,lane['route_token'],**options)
+        except AlreadyRunning:
+            from .lane_policy import queue
+            queue(store,lane['route_token'],**options)
+            print('Change queued. The relay will apply it after the current batch finishes; saved work is preserved.')
+            return
+        output(summary(lane))
+    elif args.lane_action == "list":
         print(presentation.human_status(presentation.snapshot(store, __version__)))
     elif args.lane_action == "prompt":
         lane = presentation.resolve_lane(store, args.route)
@@ -478,13 +503,16 @@ def stop(store, timeout=15):
 
 
 def run(args, store):
-    if args.command == "menu":
+    if args.command in ("menu","text-menu"):
         if not sys.stdin.isatty():
             raise ValueError("Menu needs an interactive terminal")
         from . import interactive
         from .managed import menu_signals
         with menu_signals():
-            return interactive.run(store, lambda command: main(["--state-dir",str(store.root),*command]))
+            dispatch = lambda command: main(["--state-dir",str(store.root),*command])
+            if args.command == "text-menu": return interactive.run(store,dispatch)
+            from .tui import run as run_tui
+            return run_tui(store,dispatch)
     elif args.command == "init":
         if not (store.root / "config.json").exists():
             store.set_config(store.config())

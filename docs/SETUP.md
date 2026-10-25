@@ -2,7 +2,7 @@
 
 This is a 0.2 preview for Ubuntu/Linux, including Ubuntu under WSL2. Python 3.11.8+ is required. Native Windows has not been verified. Run commands from your extracted package or checkout; no public hosting URL is assumed.
 
-Use `./relay` for the numbered menu after bootstrap. Start keeps the menu available while a managed worker runs, so you can add lanes and show their starters in the same terminal. Choose **0 — Stop safely and exit** when finished. **8 — Show recent worker output** displays startup errors and recent results. Start also opens a live progress view with tables, checker diagnostics and notices when a proposal beats a comparable saved/current best. Assembly diffs are kept out of the terminal. Press Enter to return to the menu while work continues; choose **9 — Live updates** to reopen it. If lane creation was interrupted, choose **Add lane** to finish that same lane; recovery reads Notion before any retry, and asks before retrying an uncertain creation whose page cannot be found. Incomplete lanes cannot produce starters. Direct `fnv-relay start` remains available as a foreground command for scripts.
+Run **`./relay`** after bootstrap to open the full-screen Courier console. **Overview** updates lane tables in place; **Lane controls** changes task selection, pauses work and resumes preserved functions; **History** shows score changes; **Activity** shows recorded data flow and errors; **Prompt notepad** stores editable copy-only prompts; **Settings** toggles metrics and opens account setup. Use the mouse, Tab, or F1–F6 to navigate. **Ctrl+Q** stops safely and exits. Keep the app open while solving; adding lanes and copying starters uses the same screen while the managed worker runs. Interrupted lane setup is recovered through Add lane. `fnv-relay text-menu` retains the numbered interface, and explicit `start`, `stop` and `status --json` commands remain available for scripts.
 
 ## First connect Notion inside ChatGPT
 
@@ -177,13 +177,13 @@ Before reclaiming an unfinished function, the relay checks its eligibility with 
 
 List preserved tasks with `fnv-relay lane parked ROUTE`. Once the project reopens one, use `fnv-relay lane resume ROUTE --address ADDRESS`. Finish or release any current claim first; the relay refuses to replace an active claim. Selecting another saved task also preserves the current continuation. It will check eligibility again before claiming, and park the task again if it remains unavailable.
 
-## Interactive menu
+## Full-screen terminal app
 
-After bootstrap, run `./relay` from the checkout. It remembers that checkout’s installation and private state directory. A regular installation also opens the menu when you run `fnv-relay` with no command.
+Run **`./relay`** after bootstrap to open the full-screen Courier console. **Overview** updates lane tables in place; **Lane controls** changes task selection, pauses work and resumes preserved functions; **History** shows score changes; **Activity** shows recorded data flow and errors; **Prompt notepad** stores editable copy-only prompts; **Settings** toggles metrics and opens account setup. Use the mouse, Tab, or F1–F6 to navigate. **Ctrl+Q** stops safely and exits. Keep the app open while solving; adding lanes and copying starters uses the same screen while the managed worker runs. Interrupted lane setup is recovered through Add lane. `fnv-relay text-menu` retains the numbered interface, and explicit `start`, `stop` and `status --json` commands remain available for scripts.
 
-Choose **Add lane**, select the task order by number, and copy the printed starter into a new ChatGPT chat with Notion connected. No route UUIDs or command flags need to be entered. **Show a lane’s ChatGPT starter**, **Show status**, and **Resume saved work** also use numbered choices.
+In **Lane controls**, toggle **Allow previously attempted functions** off for fresh-only new selections. The current saved task can still be resumed. To move on immediately, select **Park current work and choose a new function now**, then apply and confirm. The controller finishes its current batch before applying queued changes. Previous sources, best results and history remain preserved.
 
-**Start relay** runs in the current terminal. Leave it open; Ctrl+C releases tracked claims safely and returns to the menu. To add lanes while it runs, open another terminal, run `./relay` there, and choose **Add lane**. Both menus use the same saved installation. Exiting the second menu leaves the running relay alone.
+In **Prompt notepad**, select a preset, copy it into ChatGPT manually, or edit and save your own prompts. Nothing is sent automatically. **History** separates official and full-extent diagnostic metrics; **Settings** selects the displayed metric and visible columns. These preferences survive restarts.
 
 ## Stopping and lease status
 

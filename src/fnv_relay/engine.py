@@ -248,7 +248,7 @@ class Engine:
         if len(status['open_claims']) >= limits['claims'] or status['submissions_today'] + len(own) >= limits['subsPerDay'] or status['awaiting_verification'] + len(own) >= limits['pending']: return None
         parked_addresses = {x['continuation']['address'].lower() for x in lane.get('parked',[])}
         if policy.get('address') and policy['address'].lower() not in parked_addresses: return {'address': policy['address'], 'context_mode': 'resume'}
-        # The project exposes bands, not a globally ranked list of open addresses.
+        # Random selection shuffles size bands; the service chooses within a band.
         available = {r['band']: r for r in self.project.call('list_bands', {})['bands']}
         order = policy.get('order', 'largest')
         if order not in ('largest', 'smallest', 'random'): raise ValueError('Unsupported selection order')
@@ -262,12 +262,23 @@ class Engine:
         elif order == 'largest': choices.reverse()
         for b in choices:
             row = available.get(b, {})
-            if row.get('allowed') and row.get('open', 0) > row.get('reserved_for_new', 0): return {'band': b, 'prefer': 'any', 'context_mode': 'resume'}
+            empty = lane.get('fresh_empty_bands', {}).get(b, 0) if policy.get('allow_attempted',True) is False else 0
+            if empty > self.clock(): continue
+            if row.get('allowed') and row.get('open', 0) > row.get('reserved_for_new', 0):
+                return {'band': b, 'prefer': 'any' if policy.get('allow_attempted',True) else 'fresh', 'context_mode': 'resume'}
         return None
 
     def defer_claim(self, lane, denial):
         retry = max(300,float(denial.get('retry_after') or 0))
         deadline = denial.get('observed_at',self.clock()) + retry
+        selected = lane.get('claim_selection', {})
+        if denial['status'] == 404 and selected.get('prefer') == 'fresh' and not lane.get('resume'):
+            lane.setdefault('fresh_empty_bands', {})[selected['band']] = deadline
+            lane.update(state='idle', admission_not_before=0, last_claim_denial=denial)
+            self.store.put_lane(lane)
+            self.store.event('fresh_band_empty',{'route_token':lane['route_token'],'band':selected['band'],'retry_at':deadline})
+            return
+
         resume = lane.get('resume')
         lane.update(state='resume_pending' if resume else 'idle', admission_not_before=deadline, last_claim_denial=denial)
         if resume:
@@ -324,6 +335,7 @@ class Engine:
                     resume = None
             args = {'address': resume['address'], 'context_mode': 'resume'} if resume else self.select(lane, status)
             if args is None or self.admission_blocked(): return
+            lane['claim_selection'] = dict(args)
             lane['sequence'] += 1; lane['state'] = 'claim_intent'; lane['claim_owner']=self.owner; self.store.put_lane(lane)
             op = 'claim:' + lane['route_token'] + ':' + str(lane['sequence'])
             def claim_once():
@@ -553,7 +565,7 @@ class Engine:
                     compact = {k: value for k, value in result.items() if k != 'versions'} | {'candidate_id': cid, 'source_sha256': digest}
                     write_json(directory/('result-'+digest+'.json'), result); self.store.set(key, {'state': 'complete', 'result': compact}); results.append(compact)
                     self.record_best(lease, source, result)
-                    self.store.event('check_complete', {'claim_id': lease['claim_id'], 'source_sha256': digest, 'status': result['status']})
+                    self.store.event('check_complete', {'route_token':lane['route_token'], 'check_index':index+1, 'claim_id': lease['claim_id'], 'source_sha256': digest, 'status': result['status']})
             if self.stop_requested(): break
             if result['status'] == 'match' and result['exit_code'] == 0:
                 self.finalize(lane, source, digest); break
@@ -779,6 +791,8 @@ class Engine:
             if self.clock() < (self.store.get('project_read_not_before') or 0): break
             try:
                 self.config = self.store.config()
+                from .lane_policy import process as process_lane_control
+                process_lane_control(self,lane)
                 if lane['state']=='claim_intent':
                     recovered=self.recover_claim_intent(lane)
                     if recovered=='owned_claim_recovered': self.release(lane,'Resolved saved claim response after interrupted assignment')
@@ -793,6 +807,7 @@ class Engine:
                 if lane['state'] in ('setup','claim_intent','preparing','closed_requires_reconciliation') or lane.get('paused'): continue
                 for message in self.notion.messages(lane['inbox']):
                     if self.stop_requested(): break
+                    if self.store.get('lane_control:'+lane['route_token']): break
                     if not isinstance(message,dict) or message.get('route_token')!=lane['route_token'] or message.get('protocol')!=PROTOCOL or message.get('sender')!='chatgpt': continue
                     identity = sha(canonical(message))
                     try: mid = check_id(message.get('message_id'))
@@ -830,6 +845,7 @@ class Engine:
                     else: continue
                     self.store.set(key,identity)
                 self.refresh(lane)
+                process_lane_control(self,lane)
                 if lane['state'] in ('idle','resume_pending') and not self.stop_requested(): self.assign(lane)
             except Exception as error:
                 if isinstance(error,ProjectError) and not error.uncertain and error.retry_after:

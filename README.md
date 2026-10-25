@@ -28,7 +28,7 @@ python3 -m venv .venv
 .venv/bin/fnv-relay --help
 ```
 
-After [Ubuntu/WSL2 bootstrap](docs/BOOTSTRAP.md), run **`./relay`** from the checkout to open the numbered menu. Choose **Account setup** to connect accounts if needed, **Add lane** to get a ready-to-paste ChatGPT starter, and **Start relay** to begin work. Lane selection and saved-work recovery use numbered choices; no UUIDs or command flags are required. A normal `fnv-relay` installation also opens the menu when run without a command. Start launches a managed worker and leaves this menu available: add lanes, copy starters, inspect status or stop from the same terminal. **0 — Stop safely and exit** releases tracked claims; keep the menu open while solving. An unfinished lane is recovered through Add lane rather than creating another record. Recent worker output is available as option 8. Start opens live updates automatically: tables show best instruction differences and check progress as work completes. New-best notices compare against checked saved work with the same pack and metric; diagnostics remain visible without assembly dumps. Press Enter to return to the menu without stopping; option 9 reopens live updates.
+Run **`./relay`** after bootstrap to open the full-screen Courier console. **Overview** updates lane tables in place; **Lane controls** changes task selection, pauses work and resumes preserved functions; **History** shows score changes; **Activity** shows recorded data flow and errors; **Prompt notepad** stores editable copy-only prompts; **Settings** toggles metrics and opens account setup. Use the mouse, Tab, or F1–F6 to navigate. **Ctrl+Q** stops safely and exits. Keep the app open while solving; adding lanes and copying starters uses the same screen while the managed worker runs. Interrupted lane setup is recovered through Add lane. `fnv-relay text-menu` retains the numbered interface, and explicit `start`, `stop` and `status --json` commands remain available for scripts.
 
 Common commands:
 
@@ -38,6 +38,8 @@ fnv-relay stop                   # release owned claims and exit safely
 fnv-relay drain                  # finish current work, then exit
 fnv-relay lane pause "My lane"
 fnv-relay lane resume "My lane"
+fnv-relay lane configure "Lane 3" --order random --no-allow-attempted
+fnv-relay lane configure "Lane 3" --order random --no-allow-attempted --switch-now
 fnv-relay status --json          # machine-readable status
 ```
 
@@ -59,3 +61,7 @@ Official setup references were checked on 2026-10-24. Follow current upstream in
 
 
 New diagnostic checks retain the selected compiled object locally and attach a compact, source-bound evidence summary to each result. `candidate_artifacts` requests include full relocation-normalized target/candidate disassembly, aligned differences, region ranges and relocation bindings. Reports use the full candidate extent (up to 256 KiB), separately labeled from the official checker's limited-window metric, and add no compiler invocations. Derived relocation bindings are checker assumptions, not independent semantic proof. Binary objects remain local. Older checks without captured objects return an explicit unavailable reason; requesting evidence never recompiles. Independent plain MATCH validation remains unchanged.
+
+Fresh-only selection uses the project's never-claimed preference and never falls back to attempted work. Random selection randomizes eligible size bands; it is not uniformly random across all functions. Selection changes apply after a running batch; **choose a new function now** preserves/releases current work and parks it before selecting another task. Saved work can still be resumed explicitly.
+
+The prompt notepad comes with the owner's **Notion tool issues** and **Ending turns early** presets verbatim. Edits and custom prompts stay in the profile's private local state and are never automatically sent or added to agent starters. Clipboard support depends on the terminal; the text is also selectable.

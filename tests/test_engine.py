@@ -516,3 +516,71 @@ def test_candidate_artifacts_reports_availability_without_recompilation(env, mod
     else:
         assert payload['diagnostics']['reason_code'] == {'historical':'not_captured','tampered':'invalid_saved_evidence','missing':'no_completed_check'}[mode]
     assert env.store.get('message:'+env.route+':evidence-request')
+
+
+def test_fresh_only_selection_never_falls_back_to_attempted(env):
+    current=lane(env);current['policy']['allow_attempted']=False;env.store.put_lane(current)
+    selected=env.engine.select(current,env.project.call('status',{}))
+    assert selected['prefer']=='fresh'
+    current['claim_selection']=selected
+    env.engine.defer_claim(current,{'status':404,'retry_after':None,'code':'no_fresh','observed_at':env.engine.clock()})
+    assert env.engine.select(current,env.project.call('status',{})) is None
+    assert env.store.lane(env.route)['state']=='idle'
+
+
+def test_owner_switch_parks_current_work_and_changes_selection(env):
+    from fnv_relay.lane_policy import configure
+    current=assign(env);old=current['lease'];directory=Path(old['directory'])
+    configured=configure(env.engine,env.route,order='random',allow_attempted=False,switch_now=True)
+    assert configured['policy']['order']=='random'
+    assert configured['policy']['allow_attempted'] is False
+    assert configured['state']=='idle' and configured['explicit_resume']
+    assert not configured.get('lease') and not configured.get('resume')
+    assert configured['parked'][0]['continuation']['previous_claim_id']==old['claim_id']
+    assert directory.exists() and (directory/'giveup-response.json').exists()
+    assert env.project.claims==1  # Reconfiguration itself never acquires a new claim.
+
+
+def test_busy_lane_control_is_durable_and_applied_by_controller(env):
+    from fnv_relay.lane_policy import queue,process
+    current=assign(env)
+    queue(env.store,env.route,order='random',allow_attempted=False,switch_now=True)
+    assert lane(env)['lease']['claim_id']==current['lease']['claim_id']
+    process(env.engine,current)
+    assert env.store.get('lane_control:'+env.route) is None
+    assert lane(env)['policy']['allow_attempted'] is False
+    assert lane(env)['parked']
+
+
+def test_failed_owner_switch_keeps_claim_and_pauses_lane(env,monkeypatch):
+    from fnv_relay.lane_policy import configure
+    from fnv_relay.project import ProjectError
+    current=assign(env);original=env.project.call
+    def call(tool,args):
+        if tool=='giveup':raise ProjectError(uncertain=True)
+        return original(tool,args)
+    monkeypatch.setattr(env.project,'call',call)
+    with pytest.raises(ProjectError):configure(env.engine,env.route,order='random',allow_attempted=False,switch_now=True)
+    kept=lane(env)
+    assert kept['paused'] and kept['lease']['claim_id']==current['lease']['claim_id']
+    assert kept['policy'].get('order')!='random'
+
+
+def test_owner_control_applies_before_another_queued_batch(env):
+    from fnv_relay.lane_policy import queue
+    current=assign(env)
+    original=env.checker.__call__
+    class Checker:
+        def __call__(self,*args,**kwargs):
+            result=original(*args,**kwargs)
+            if len(env.checker.calls)==1:
+                queue(env.store,env.route,order='random',allow_attempted=False,switch_now=True,paused=True)
+            return result
+    env.engine.checker=Checker()
+    post_batch(env,[candidate(env,'before-switch','int target(){return 41;}')],mid='before-switch')
+    post_batch(env,[candidate(env,'after-switch','int target(){return 40;}')],mid='after-switch')
+    env.engine.poll()
+    assert len(env.checker.calls)==1
+    assert lane(env)['paused'] and lane(env)['parked']
+    assert env.store.get('lane_control:'+env.route) is None
+    assert not env.store.get('message:'+env.route+':after-switch')
