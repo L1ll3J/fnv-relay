@@ -10,8 +10,8 @@ from fnv_relay.store import Store
 LANE={'landing':'01234567-89ab-cdef-0123-456789abcdef','route_token':'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee','label':'First lane'}
 
 
-def test_default_render_is_byte_identical_to_pre_editor_prompt():
-    assert hashlib.sha256(starter_prompt(LANE).encode()).hexdigest()=='1c48fb3f997aea7f53b8e979989e4db986af45224d6b07685124fe114488b3b0'
+def test_default_render_matches_approved_prompt():
+    assert hashlib.sha256(starter_prompt(LANE).encode()).hexdigest()=='cfd9c89d68b2cab43b7729d0c720c92bf536cc1458d2198e0447fe02f400f96d'
 
 
 def test_template_persists_per_profile_renders_per_lane_and_reset_restores_default(tmp_path):

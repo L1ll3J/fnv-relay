@@ -12,7 +12,10 @@ DEFAULT = ("Welcome courier o7\n\n"
            "following its HELLO instructions. Read future assignments and results from that lane’s outbox.\n\n"
            "You have my explicit approval to read, create and edit pages within this private Notion relay for this project, "
            "including uploading candidate source code and relevant project context, posting HELLO registrations and BATCH messages, "
-           "and recording findings and results.")
+           "and recording findings and results.\n\n"
+           "Treat this similar to a '/goal', no need to report back to me until it's done o7\n\n"
+           "If you haven't solved it, write some attempts, you can make any request you like to the Notion relay, "
+           "and if awaiting a response you can just use python to poll. Let's get this solved o7")
 KEY = 'starter_prompt_template'
 TOKEN = re.compile(r'\{\{([^{}\n]+)\}\}')
 ALLOWED = {'landing_url','route_uuid','lane_label'}
