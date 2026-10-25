@@ -584,3 +584,87 @@ def test_owner_control_applies_before_another_queued_batch(env):
     assert lane(env)['paused'] and lane(env)['parked']
     assert env.store.get('lane_control:'+env.route) is None
     assert not env.store.get('message:'+env.route+':after-switch')
+
+
+@pytest.mark.parametrize('stage', ['context', 'assignment'])
+def test_interrupted_assignment_readback_resumes_same_claim_without_duplicate_uploads(env, monkeypatch, stage):
+    from fnv_relay.notion import NotionError
+    original = env.notion.messages
+    failed = []
+
+    def interrupted_readback(identifier):
+        records = env.notion.pages[identifier]
+        target = (records and records[0].get('kind') == 'CONTEXT') if stage == 'context' else any(r.get('payload', {}).get('status') == 'ASSIGNED' for r in records)
+        if not failed and target:
+            failed.append(identifier)
+            raise NotionError('Notion mcp_transport_error')
+        return original(identifier)
+
+    monkeypatch.setattr(env.notion, 'messages', interrupted_readback)
+    env.notion.append(lane(env)['inbox'], message(env, 'HELLO', 'hello'))
+    env.engine.poll()
+    saved = lane(env)
+    assert saved['state'] == 'preparing'
+    claim_id = saved['lease']['claim_id']
+    pack_hash = saved['lease']['pack_sha256']
+    assert env.store.pending_operations() == []
+    assert env.project.claims == 1
+    assert env.store.get('last_error:'+env.route)['type'] == 'NotionError'
+    # Backoff prevents rapid retries; a later poll resumes the same preparation.
+    env.engine.poll()
+    assert lane(env)['state'] == 'preparing'
+    env.engine.clock = lambda: env.project.now + 31
+    env.engine.poll()
+    current = lane(env)
+    assert current['state'] == 'assigned'
+    assert current['lease']['claim_id'] == claim_id
+    assert current['lease']['pack_sha256'] == pack_hash
+    assert env.project.claims == 1
+    assert sum(tool == 'packet' for tool, _ in env.project.calls) == 1
+    contexts = [records[0] for records in env.notion.pages.values()
+                if records and records[0].get('kind') == 'CONTEXT']
+    assert len(contexts) == len({(r['filename'], r['part_index']) for r in contexts})
+    assert len([r for r in original(current['outbox']) if r.get('payload', {}).get('status') == 'ASSIGNED']) == 1
+    assert env.store.get('last_error:'+env.route) is None
+    assert 'preparation_retry_at' not in current
+
+
+def test_interrupted_preparation_does_not_repeat_uncertain_creation(env, monkeypatch):
+    original = env.notion.create_page
+    created = []
+
+    def lost_creation_receipt(parent, title, records, text=''):
+        result = original(parent, title, records, text)
+        if records and records[0].get('kind') == 'CONTEXT':
+            created.append(result)
+            raise RuntimeError('Lost creation acknowledgement')
+        return result
+
+    monkeypatch.setattr(env.notion, 'create_page', lost_creation_receipt)
+    env.notion.append(lane(env)['inbox'], message(env, 'HELLO', 'hello'))
+    env.engine.poll()
+    env.engine.clock = lambda: env.project.now + 31
+    env.engine.poll()
+    assert lane(env)['state'] == 'preparing'
+    assert env.project.claims == 1
+    assert len(created) == 1
+    assert env.store.get('last_error:'+env.route)['type'] == 'UncertainOperation'
+    assert len(env.store.pending_operations()) == 1
+
+
+def test_preparation_retry_releases_near_expiry_without_publishing_assignment(env, monkeypatch):
+    def failed_export(*args):
+        raise RuntimeError('Interrupted preparation')
+
+    monkeypatch.setattr(module.context, 'export', failed_export)
+    env.notion.append(lane(env)['inbox'], message(env, 'HELLO', 'hello'))
+    env.engine.poll()
+    assert lane(env)['state'] == 'preparing'
+    current = lane(env)
+    current['paused'] = True
+    env.store.put_lane(current)
+    env.engine.clock = lambda: env.project.now + 6700
+    env.engine.poll()
+    assert not lane(env).get('lease')
+    assert env.project.claims == 1
+    assert not any(r.get('payload', {}).get('status') == 'ASSIGNED' for r in env.notion.messages(current['outbox']))

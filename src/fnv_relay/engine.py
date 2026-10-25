@@ -378,7 +378,6 @@ class Engine:
             write_json(directory/'claim.json', claim)
             lease = {'claim_id': cid, 'address': claim['address'], 'size': claim['size'], 'expires': claim.get('expires_at') or claim['expires'], 'directory': str(directory), 'lease_check_limit': None, 'owner':self.owner}
             lane.update(state='preparing', lease=lease, explicit_resume=False); self.store.put_lane(lane)
-            unexpected_address = resume is not None and lease['address'] != resume['address']
             if 'flags' in claim: lease['claim_flags']=claim['flags']; self.store.put_lane(lane)
             if self.watchdog:
                 argv = [sys.executable, '-m', 'fnv_relay.watch', '--state-dir', str(self.store.root), '--claim-id', cid]
@@ -386,7 +385,15 @@ class Engine:
                 with (directory/'watchdog.log').open('ab') as log:
                     process = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
                 write_json(directory/'watchdog.json', {'pid': process.pid, 'owner':self.owner, 'model_calls': 0})
-        if unexpected_address:
+        self.prepare_assignment(lane)
+
+    def prepare_assignment(self, lane):
+        self.refresh(lane)
+        lease = lane.get('lease')
+        if lane['state'] != 'preparing' or not lease: return
+        cid = lease['claim_id']; directory = Path(lease['directory'])
+        resume = lane.get('resume')
+        if resume is not None and lease['address'] != resume['address']:
             self.release(lane, 'Continuation response selected a different address', resume=False)
             with self.lane_lock(lane['route_token']):
                 self.refresh(lane)
@@ -395,9 +402,16 @@ class Engine:
             self.store.set('last_error:'+lane['route_token'],{'type':'ValueError','message':'Continuation returned an unexpected address; requested address retained'})
             return
         if not self.preparing_current(lane, cid): return
-        packet = self.project.call('packet', {'claim_id': cid, 'context_mode': 'resume'}); write_json(directory/'packet.json', packet)
+        packet_file = directory/'packet.json'
+        packet = json.loads(packet_file.read_text()) if packet_file.exists() else self.project.call('packet', {'claim_id': cid, 'context_mode': 'resume'})
+        if not packet_file.exists(): write_json(packet_file, packet)
         if not self.preparing_current(lane, cid): return
-        self.project.download_pack(packet['pack_url'], directory/'pack.tar.gz'); extract(directory/'pack.tar.gz', directory/'pack')
+        archive = directory/'pack.tar.gz'
+        if lease.get('pack_sha256'):
+            if sha(archive.read_bytes()) != lease['pack_sha256']: raise ValueError('Saved assignment pack changed')
+        else:
+            self.project.download_pack(packet['pack_url'], archive)
+        extract(archive, directory/'pack')
         if not self.preparing_current(lane, cid): return
         pack = json.loads((directory/'pack/pack.json').read_text())
         if pack['address'] != lease['address'] or pack['size'] != lease['size']: raise ValueError('Pack function identity differs')
@@ -434,7 +448,8 @@ class Engine:
         self.publish(lane, key, {'next_action':dict(NEXT_ACTION), 'status': 'ASSIGNED', 'scope': scope, 'lease': lease, 'pages': pages, 'candidate_schema': schema, 'batch_schema': batch, 'source_limit_bytes': self.config.get('max_candidate_bytes', 1048576), 'instructions': 'Match the complete assigned function using original pack/types/flags. Use named-field C++, no asm/naked/raw-byte or absolute-address tricks. Save complete sources as CANDIDATE JSON pages. Batches may contain 1–8 distinct candidates. Three or four are encouraged when useful for efficient comparison; a single targeted candidate is valid. A MATCH still needs independent plain validation. Only controller submits using the owner API key. Do not send commands or credentials. Stop new candidates before expiry minus14minutes. Ask REQUEST for small missing context. The local controller manages claim release and continuation. Report suspected defects with DEFECT_PROPOSAL; these queue for review and never automatically flag solely on your assertion. For source>24k characters use parts:[{page,part_index,chunk_sha256}] instead ofsource_utf8; eachpage haskindSOURCE_CHUNK andsameclaim/pack/route/candidate scope, source_utf8 andpart_index. Whole sourceSHA/bytes are required on CANDIDATE file.'})
         with self.lane_lock(lane['route_token']):
             if not self.preparing_current(lane, cid): return
-            lane['state'] = 'assigned'; lane.pop('resume', None); self.store.put_lane(lane)
+            lane['state'] = 'assigned'; lane.pop('resume', None); lane.pop('preparation_retry_at', None); self.store.put_lane(lane)
+            self.store.set('last_error:'+lane['route_token'], None)
 
     def preparing_current(self, lane, claim_id):
         with self.lane_lock(lane['route_token']):
@@ -830,7 +845,10 @@ class Engine:
                     self.release(lane,'Controller unavailable or lease near expiry; preserved unfinished work')
                 self.refresh(lane)
                 self.publish_closed_leases(lane)
-                if lane['state'] in ('setup','claim_intent','preparing','closed_requires_reconciliation') or lane.get('paused'): continue
+                if lane['state'] == 'preparing':
+                    if self.clock() >= lane.get('preparation_retry_at', 0): self.prepare_assignment(lane)
+                    continue
+                if lane['state'] in ('setup','claim_intent','closed_requires_reconciliation') or lane.get('paused'): continue
                 self.ensure_work_guidance(lane)
                 attempts.tick(self,lane)
                 for message in self.notion.messages(lane['inbox']):
@@ -883,5 +901,8 @@ class Engine:
             except Exception as error:
                 if isinstance(error,ProjectError) and not error.uncertain and error.retry_after:
                     self.store.set('project_read_not_before', self.clock()+max(0,error.retry_after))
+                self.refresh(lane)
+                if lane['state'] == 'preparing':
+                    lane['preparation_retry_at'] = self.clock()+30; self.store.put_lane(lane)
                 self.store.event('lane_error',{'route_token':lane['route_token'],'type':type(error).__name__,'message':str(error)[:400]})
                 self.store.set('last_error:'+lane['route_token'],{'type':type(error).__name__,'http_status':getattr(error,'status',None),'message':str(error)[:400]})
