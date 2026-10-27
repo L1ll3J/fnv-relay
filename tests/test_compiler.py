@@ -255,3 +255,39 @@ def test_new_official_accepted_flags_output_requires_pack_permission():
     raw = b'{"status":"match","accepted_flags":["/Od","/Ob1"]}'
     assert _interpret(0, raw, plain=False, pack=pack)[1]['accepted_flags'] == ['/Od','/Ob1']
     assert not _interpret(0, raw, plain=False, pack={'flags':['/O2']})[0]
+
+
+RTM_SUFFIX = "  (compiled with Visual C++ 2008 RTM, cl 15.00.21022.08, the compiler the game was built with: submit it as it is)"
+
+
+def test_rtm_plain_protocol_is_exact_and_pack_bound():
+    pack = {"flags":["/O2"], "accept_also":[["/Od"]]}
+    accepted = "MATCH  (under /Od, a flag set this function also accepts: submit it as it is)"
+    for line in ("MATCH", accepted):
+        assert compiler._interpret(0,(line+RTM_SUFFIX).encode(),plain=True,pack=pack)[0]
+        assert not compiler._interpret(1,(line+RTM_SUFFIX).encode(),plain=True,pack=pack)[0]
+        assert not compiler._interpret(0,(line+RTM_SUFFIX+" extra").encode(),plain=True,pack=pack)[0]
+    assert not compiler._interpret(0,(accepted+RTM_SUFFIX).encode(),plain=True,pack={})[0]
+    proof = "MATCH"+RTM_SUFFIX+"  (under your --flags, not the pack's /O2: the site does not accept this yet.)"
+    assert not compiler._interpret(0,proof.encode(),plain=True,pack=pack)[0]
+
+
+def test_rtm_config_environment_provenance_and_protected_prefix(inputs, monkeypatch):
+    from test_toolchains import compiler as fixture_compiler
+    cfg, pack, source, work = inputs
+    sp1 = fixture_compiler(work.parent, "sp1")
+    rtm = fixture_compiler(work.parent, "rtm")
+    for root in (sp1, rtm):
+        for sub in ("VC/include", "VC/lib", "SDK/Include", "SDK/Lib"):
+            (root/sub).mkdir(parents=True)
+    cfg.update(compiler_dir=str(sp1), rtm_compiler_dir=str(rtm))
+    calls=executor(monkeypatch,stdout=("MATCH"+RTM_SUFFIX).encode())
+    result=compiler.check(cfg,pack,source,work,plain=True)
+    assert result["standalone_match"]
+    assert calls[0][1]["FNVCHECK_RTM_ROOT"] == str(rtm)
+    before=compiler._versions(compiler._config(cfg))
+    (rtm/"VC/bin/c2.dll").write_bytes(b"changed")
+    assert compiler._versions(compiler._config(cfg)) != before
+    cfg["wine_prefix"] = str(rtm/"prefix")
+    with pytest.raises(compiler.CompilerError,match="protected input"):
+        compiler._config(cfg)

@@ -229,3 +229,22 @@ def test_old_generation_cache_is_preserved_but_not_reused_for_new_batch(env,monk
     assert len(env.checker.calls)==2
     model=Dashboard(env.store);model.update()
     assert len(model.checks)==2
+
+
+
+def test_compiler_generation_binding_and_legacy_rtm_is_disabled(tool_env, tmp_path):
+    from test_toolchains import compiler
+    store, project, paths = tool_env
+    legacy=official_tools.current(store,project,paths,now=100)
+    sp1=compiler(tmp_path,"sp1");rtm=compiler(tmp_path,"rtm")
+    configured=paths | {"compiler_dir":str(sp1),"rtm_compiler_dir":str(rtm)}
+    store.set_config({"paths":configured})
+    snapshot=official_tools.current(store,project,configured,now=500)
+    assert snapshot["id"] != legacy["id"]
+    selected=official_tools.validate(store,snapshot)
+    assert selected["rtm_compiler_dir"] == str(rtm)
+    assert selected["compiler_dir"] == str(sp1)
+    assert official_tools.validate(store,legacy)["rtm_compiler_dir"] == ""
+    (rtm/"VC/bin/c2.dll").write_bytes(b"changed")
+    with pytest.raises(ValueError,match="generation changed"):
+        official_tools.validate(store,snapshot)

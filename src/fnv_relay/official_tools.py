@@ -61,7 +61,10 @@ def validate(store, snapshot):
             raise ValueError('Official tool snapshot file changed')
     if _tree(root/'fnvcheck') != manifest['checker_tree']:
         raise ValueError('Official checker snapshot changed')
-    return {'checker_dir':str(root/'fnvcheck'), 'function_index':str(root/'function_index.json'),
+    from .toolchains import validate as validate_compilers
+    compilers = manifest.get('toolchains', {})
+    validate_compilers(compilers)
+    return {'rtm_compiler_dir':compilers.get('rtm', {}).get('root', ''), **({'compiler_dir':compilers['sp1']['root']} if compilers else {}), 'checker_dir':str(root/'fnvcheck'), 'function_index':str(root/'function_index.json'),
             'symbols':str(root/'fnvdecomp_symbols.json'), 'compiler_tips':str(root/'compiler_tips.md'), **({'official_guidance':str(root/'agents.md')} if 'agents.md' in manifest['files'] else {})}
 
 
@@ -95,6 +98,10 @@ def refresh(store, project, *, now=None):
         for file in (stage/'fnvcheck').rglob('*.py'):
             ast.parse(file.read_text(), filename=file.name)
         manifest = {'files':hashes, 'checker_tree':_tree(stage/'fnvcheck')}
+        paths = store.config().get('paths', {})
+        if paths.get('rtm_compiler_dir'):
+            from .toolchains import capture
+            manifest['toolchains'] = {'sp1':capture(paths['compiler_dir'], 'sp1'), 'rtm':capture(paths['rtm_compiler_dir'], 'rtm')}
         snapshot = {'id':identity(manifest), 'manifest':manifest, 'verified_at':now}
         write_json(stage/'snapshot.json', snapshot)
         target = parent/snapshot['id']

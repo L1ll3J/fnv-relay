@@ -98,3 +98,17 @@ installation of this updater still requires the usual explicit package upgrade.
 Published Git tags trigger the release workflow, which builds the wheel and its
 manifest. This is application code from the configured repository, not arbitrary
 URLs supplied by a worker or report.
+
+
+### Optional VC++ 2008 RTM fallback
+
+Keep SP1 15.00.30729.01 intact and install RTM 15.00.21022.08 separately,
+following the official checker instructions. Set `paths.rtm_compiler_dir` in
+the owner configuration to its root (containing `VC/bin/cl.exe`). New official
+snapshots bind both compiler versions and core component hashes, so cached
+SP1 results cannot suppress a check under a different compiler generation.
+Existing assignments keep their pinned environment; older snapshots do not
+inherit the newly configured fallback. Both toolchains remain read-only in
+the compiler sandbox and are fingerprinted before and after each check.
+Official RTM annotations are accepted only on successful, pack-bound plain
+MATCH output; independent validation remains required before submission.
