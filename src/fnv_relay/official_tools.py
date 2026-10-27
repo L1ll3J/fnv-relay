@@ -54,15 +54,15 @@ def validate(store, snapshot):
     root = store.root/'official-tools'/token
     if root.is_symlink() or root.resolve().parent != (store.root/'official-tools').resolve():
         raise ValueError('Official tool snapshot escaped its directory')
-    if set(manifest['files']) != set(FILES): raise ValueError('Incomplete official tool snapshot')
-    for name in FILES:
+    if set(manifest['files']) not in (set(FILES), set(FILES) | {'agents.md'}): raise ValueError('Incomplete official tool snapshot')
+    for name in manifest['files']:
         file = root/name
         if file.is_symlink() or digest(file) != manifest['files'][name]:
             raise ValueError('Official tool snapshot file changed')
     if _tree(root/'fnvcheck') != manifest['checker_tree']:
         raise ValueError('Official checker snapshot changed')
     return {'checker_dir':str(root/'fnvcheck'), 'function_index':str(root/'function_index.json'),
-            'symbols':str(root/'fnvdecomp_symbols.json'), 'compiler_tips':str(root/'compiler_tips.md')}
+            'symbols':str(root/'fnvdecomp_symbols.json'), 'compiler_tips':str(root/'compiler_tips.md'), **({'official_guidance':str(root/'agents.md')} if 'agents.md' in manifest['files'] else {})}
 
 
 def refresh(store, project, *, now=None):
@@ -75,13 +75,15 @@ def refresh(store, project, *, now=None):
     with store.lock('official-tools-refresh'), tempfile.TemporaryDirectory(prefix='.download-', dir=parent) as temporary:
         stage = Path(temporary)
         hashes = {}
-        for name in FILES:
-            project.download_pack(BASE+name, stage/name)
+        for name in (*FILES, 'agents.md'):
+            project.download_pack('https://fnvdecomp.com/agents.md' if name == 'agents.md' else BASE+name, stage/name)
             hashes[name] = digest(stage/name)
         addresses(stage/'function_index.json')
         symbols = json.loads((stage/'fnvdecomp_symbols.json').read_text())
         if not isinstance(symbols, (dict, list)) or not symbols:
             raise ValueError('Official symbols are empty or malformed')
+        if not (stage/'agents.md').read_text().strip():
+            raise ValueError('Official guidance is empty')
         if not (stage/'compiler_tips.md').read_text().strip():
             raise ValueError('Official compiler tips are empty')
         extracted = stage/'.extract'

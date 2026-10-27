@@ -47,15 +47,15 @@ def test_refresh_validates_and_atomically_publishes_without_changing_config(tool
     result=official_tools.current(store,project,paths,now=100,force=True)
     selected=official_tools.validate(store,result)
     assert official_tools.addresses(selected['function_index'])=={0x401000}
-    assert len(project.calls)==4
+    assert len(project.calls)==5
     assert store.config()==before
     assert store.get(official_tools.CURRENT)==result
     assert not list((store.root/'official-tools').glob('.download-*'))
     # A freshly verified generation is reused for admissions until the refresh deadline.
     assert official_tools.current(store,project,paths,now=101)==result
-    assert len(project.calls)==4
+    assert len(project.calls)==5
     official_tools.current(store,project,paths,now=401)
-    assert len(project.calls)==8
+    assert len(project.calls)==10
 
 
 def test_failed_refresh_never_replaces_previous_generation(tool_env):
@@ -89,7 +89,7 @@ def test_new_assignment_refreshes_missing_target_and_keeps_old_snapshot_immutabl
     assert new['id']!=old['id']
     assert 0xb82112 in official_tools.addresses(selected['function_index'])
     assert old_path.read_bytes()==raw
-    assert len(project.calls)==8
+    assert len(project.calls)==10
 
 
 def test_existing_assignment_keeps_snapshot_after_new_activation(tool_env):
@@ -100,7 +100,7 @@ def test_existing_assignment_keeps_snapshot_after_new_activation(tool_env):
     selected,pinned=official_tools.for_target(store,project,paths,{'address':'0x00401000','tool_snapshot':old},now=1000)
     assert current['id']!=pinned['id'] and pinned==old
     assert 0xb82112 not in official_tools.addresses(selected['function_index'])
-    assert len(project.calls)==8
+    assert len(project.calls)==10
 
 
 def test_still_missing_target_blocks_and_refresh_is_rate_limited(tool_env):
@@ -109,7 +109,7 @@ def test_still_missing_target_blocks_and_refresh_is_rate_limited(tool_env):
     for now in (101,102):
         with pytest.raises(official_tools.TargetIndexUnavailable):
             official_tools.for_target(store,project,paths,{'address':'0x00b82112'},now=now)
-    assert len(project.calls)==8
+    assert len(project.calls)==10
     project.addresses.append('00b82112')
     selected,_=official_tools.for_target(store,project,paths,{'address':'0x00b82112'},now=402)
     assert 0xb82112 in official_tools.addresses(selected['function_index'])
@@ -198,7 +198,7 @@ def test_start_refreshes_even_with_a_recent_saved_snapshot(env,monkeypatch):
     monkeypatch.setattr(env.project,'set_stop_event',lambda event:None,raising=False)
     monkeypatch.setattr(env.notion,'whoami',lambda:{},raising=False)
     assert cli.serve(env.store,once=True)==0
-    assert len(project.calls)==8
+    assert len(project.calls)==10
     assert env.project.claims==0
 
 

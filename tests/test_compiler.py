@@ -241,3 +241,17 @@ def test_cancellation_reaps_owned_child_and_retains_logs(tmp_path, monkeypatch):
     assert len(children) == 1 and children[0].poll() is not None
     assert (tmp_path/'interrupted.stdout.log').exists()
     assert (tmp_path/'interrupted.stderr.log').exists()
+
+
+def test_new_official_accepted_flags_output_requires_pack_permission():
+    from fnv_relay.compiler import _interpret
+    pack = {'flags':['/O2'], 'accept_also':[['/Od','/Ob1']]}
+    line = b'MATCH  (under /Od /Ob1, a flag set this function also accepts: submit it as it is)\n'
+    matched, result = _interpret(0, line, plain=True, pack=pack)
+    assert matched and result['accepted_flags'] == ['/Od','/Ob1']
+    assert not _interpret(0, line, plain=True, pack={'flags':['/O2']})[0]
+    assert not _interpret(0, b'LITERAL_MISMATCH\n', plain=True, pack=pack)[0]
+    assert not _interpret(0, b"MATCH  (under your --flags, not the pack's /O2: the site does not accept this yet.)\n", plain=True, pack=pack)[0]
+    raw = b'{"status":"match","accepted_flags":["/Od","/Ob1"]}'
+    assert _interpret(0, raw, plain=False, pack=pack)[1]['accepted_flags'] == ['/Od','/Ob1']
+    assert not _interpret(0, raw, plain=False, pack={'flags':['/O2']})[0]

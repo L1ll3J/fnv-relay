@@ -442,6 +442,7 @@ class Engine:
                 if not source.exists(): source.write_bytes(raw)
         paths = self.tool_paths(lane)
         if paths.get('compiler_tips'): files.append(Path(paths['compiler_tips']))
+        if paths.get('official_guidance'): files.append(Path(paths['official_guidance']))
         self.continuation_context(lane, directory, files)
         if not self.preparing_current(lane, cid): return
         files.append(context.export(paths, directory/'pack', directory/'context'))

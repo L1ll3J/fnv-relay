@@ -197,10 +197,14 @@ def _versions(cfg: dict) -> dict:
     return result
 
 
-def _interpret(code: int, stdout: bytes, *, plain: bool) -> tuple[bool, dict]:
+def _interpret(code: int, stdout: bytes, *, plain: bool, pack=None) -> tuple[bool, dict]:
     if plain:
-        match = code == 0 and "MATCH" in stdout.decode("utf-8", "replace").splitlines()
-        return match, {"status": "match" if match else "not_match", "mode": "plain"}
+        lines = stdout.decode("utf-8", "replace").splitlines()
+        first = lines[0] if lines else ""
+        allowed = (pack or {}).get("accept_also") or []
+        accepted = next((flags for flags in allowed if first == "MATCH  (under %s, a flag set this function also accepts: submit it as it is)" % " ".join(flags)), None)
+        match = code == 0 and (first == "MATCH" or accepted is not None)
+        return match, {"status": "match" if match else "not_match", "mode": "plain", "accepted_flags": accepted or (pack or {}).get("flags")}
     try:
         value = json.loads(stdout)
     except (ValueError, UnicodeDecodeError):
@@ -208,7 +212,9 @@ def _interpret(code: int, stdout: bytes, *, plain: bool) -> tuple[bool, dict]:
     if not isinstance(value, dict) or not isinstance(value.get("status"), str):
         return False, {"status": "infrastructure_error", "errors": ["Unknown official checker JSON shape"]}
     # Preserve only the official public diagnostic fields.
-    checker = {k: value[k] for k in ("status", "errors", "diffs", "ndiff_insn", "extent", "diff") if k in value}
+    checker = {k: value[k] for k in ("status", "errors", "diffs", "ndiff_insn", "extent", "diff", "accepted_flags") if k in value}
+    if "accepted_flags" in checker and checker["accepted_flags"] not in ((pack or {}).get("accept_also") or []):
+        return False, {"status": "infrastructure_error", "errors": ["Checker reported a flag set absent from the original pack"]}
     return code == 0 and checker["status"] == "match", checker
 
 
@@ -257,7 +263,7 @@ def check(config: dict, pack_dir: Path, candidate: Path, work: Path, *, plain: b
     (work / "stderr.log").write_bytes(stderr)
     unchanged = (versions == _versions(cfg) and _sha(snapshot) == source_hash
                  and _tree(pack_dir) == pack_hash and _tree(work / "pack") == pack_hash)
-    match, checker = _interpret(code, stdout, plain=plain)
+    match, checker = _interpret(code, stdout, plain=plain, pack=json.loads((work / "pack/pack.json").read_text()))
     # Only a completed attestation proves that setup reached exec.
     try:
         ready = json.loads((work / "sandbox-ready.json").read_text())

@@ -643,6 +643,9 @@ def run(args, store):
 
 def main(argv=None):
     args = parser().parse_args(argv)
+    if args.command in ("menu", "text-menu"):
+        from .app_updates import activate
+        activate(args.state_dir, argv)
     store = None
     try:
         store = Store(args.state_dir)

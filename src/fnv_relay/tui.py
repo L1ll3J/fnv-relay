@@ -158,8 +158,9 @@ class RelayApp(App):
     #policy-info, #saved-info, #account-info { height: auto; margin-bottom: 1; }
     '''
 
-    def __init__(self,store,dispatch,worker=None):
+    def __init__(self,store,dispatch,worker=None,*,application_updates=False):
         super().__init__()
+        self.application_updates=application_updates
         self.store,self.dispatch=store,dispatch
         self.worker=worker or MenuWorker(store,dispatch,self.notice)
         self.model=Dashboard(store)
@@ -227,6 +228,9 @@ class RelayApp(App):
                         yield Checkbox(label,value=self.settings.get(key,True),id='metric-'+key)
                     yield Static('Official and full-extent counts measure different scopes. This display choice does not change submission validation.',classes='help')
                     yield Static('',id='account-info',markup=False)
+                    from .app_updates import enabled
+                    yield Checkbox('Automatic application updates (activate on next launch)',value=enabled(self.store.root),id='app-updates')
+                    yield Static('',id='app-update-status',markup=False)
                     with Horizontal(classes='buttons'):
                         yield Button('Readiness check',id='doctor')
                         yield Button('Account setup',id='setup')
@@ -235,6 +239,10 @@ class RelayApp(App):
         yield Footer()
 
     def on_mount(self):
+        if self.application_updates:
+            from .app_updates import start
+            start(self.store.root)
+            self.set_interval(3600,lambda:start(self.store.root))
         self.query_one('#history-table',DataTable).add_columns('UTC','Claim','Check','Differences','Change','Result','Source')
         self.query_one('#activity-table',DataTable).add_columns('UTC','Lane','Event','Details')
         self.refresh_data()
@@ -253,6 +261,9 @@ class RelayApp(App):
         self.call_after_refresh(self.screen.focus_next, '#'+tab+' *')
 
     def refresh_data(self):
+        from .app_updates import read
+        update=read(self.store.root/'application-update-status.json')
+        self.query_one('#app-update-status',Static).update('Application update: '+update.get('state','not checked')+(' · '+update['version'] if update.get('version') else ''))
         self.data=self.model.update()
         rows=self.data['lanes']
         if self.selected not in {r['route_token'] for r in rows}:self.selected=rows[0]['route_token'] if rows else None
@@ -383,6 +394,10 @@ class RelayApp(App):
                 self.note_id=entry['id'];self.query_one('#prompt-name',Input).value=entry['name'];self.query_one('#prompt-editor',TextArea).load_text(entry['text'])
 
     def on_checkbox_changed(self,event):
+        if event.checkbox.id=='app-updates':
+            from .app_updates import set_enabled,start
+            set_enabled(self.store.root,event.value)
+            if event.value and self.application_updates:start(self.store.root)
         if event.checkbox.id and event.checkbox.id.startswith('metric-'):
             self.settings[event.checkbox.id[7:]]=event.value;self.store.set('terminal_display',self.settings)
             if self.data:self.refresh_data()
@@ -524,7 +539,7 @@ class RelayApp(App):
 
 
 def run(store,dispatch):
-    app=RelayApp(store,dispatch)
+    app=RelayApp(store,dispatch,application_updates=True)
     try:return app.run() or 0
     finally:
         if app.worker.running():app.worker.stop()
