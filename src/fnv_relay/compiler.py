@@ -66,6 +66,15 @@ def _config(config: dict) -> dict:
     for relative in ("VC/include", "VC/lib", "SDK/Include", "SDK/Lib"):
         if not (Path(result["compiler_dir"]) / relative).is_dir():
             raise CompilerError(f"Missing compiler_dir/{relative}")
+    if config.get("rtm_compiler_dir"):
+        from .toolchains import capture
+        rtm = Path(config["rtm_compiler_dir"]).expanduser().resolve(strict=True)
+        capture(rtm, "rtm")
+        capture(result["compiler_dir"], "sp1")
+        for relative in ("VC/include", "VC/lib", "SDK/Include", "SDK/Lib"):
+            if not (rtm / relative).is_dir():
+                raise CompilerError(f"Missing rtm_compiler_dir/{relative}")
+        result["rtm_compiler_dir"] = str(rtm)
     python = Path(config.get("python", sys.executable)).expanduser().absolute()
     if not python.is_file():
         raise CompilerError("Configured Python executable does not exist")
@@ -81,10 +90,11 @@ def _config(config: dict) -> dict:
         result["compiler_tips"] = str(Path(config["compiler_tips"]).expanduser().resolve(strict=True))
     prefix = Path(result["wine_prefix"])
     # A dedicated prefix must never grant write access to input trees or HOME.
-    for protected in [Path.home(), Path(result["python"]).parent.parent] + [Path(result[k]) for k in ("game_exe", "checker_dir", "compiler_dir", "function_index", "symbols")]:
+    for protected in [Path.home(), Path(result["python"]).parent.parent] + [Path(result[k]) for k in ("game_exe", "checker_dir", "compiler_dir", "function_index", "symbols", "rtm_compiler_dir") if k in result]:
         if prefix.resolve() == protected.resolve() or prefix.resolve() in protected.resolve().parents:
             raise CompilerError("wine_prefix overlaps a protected input or HOME")
-    for name in ("checker_dir", "compiler_dir"):
+    for name in ("checker_dir", "compiler_dir", "rtm_compiler_dir"):
+        if name not in result: continue
         protected = Path(result[name]).resolve()
         if protected in prefix.resolve().parents:
             raise CompilerError("wine_prefix is inside a protected input tree")
@@ -106,6 +116,7 @@ def _env(config: dict, work: Path) -> dict:
         "FNVCHECK_TOOLS": config["checker_dir"], "FNVCHECK_INDEX": config["function_index"],
         "FNVCHECK_SYMBOLS": config["symbols"], "FNVCHECK_IMAGE": config["game_exe"],
         "FNV_MSVC9_ROOT": root, "FNV_MSVC9_PREFIX": config["wine_prefix"],
+        "FNVCHECK_RTM_ROOT": config.get("rtm_compiler_dir", ""),
     }
 
 
@@ -192,15 +203,23 @@ def _versions(cfg: dict) -> dict:
     for key in ("game_exe", "function_index", "symbols", "compiler_tips"):
         if key in cfg:
             result[key + "_sha256"] = _sha(Path(cfg[key]))
-    for key in ("checker_dir", "compiler_dir"):
+    for key in ("checker_dir", "compiler_dir", "rtm_compiler_dir"):
+        if key not in cfg: continue
         result[key + "_sha256"] = _tree(Path(cfg[key]))
     return result
 
 
-def _interpret(code: int, stdout: bytes, *, plain: bool) -> tuple[bool, dict]:
+def _interpret(code: int, stdout: bytes, *, plain: bool, pack=None) -> tuple[bool, dict]:
     if plain:
-        match = code == 0 and "MATCH" in stdout.decode("utf-8", "replace").splitlines()
-        return match, {"status": "match" if match else "not_match", "mode": "plain"}
+        lines = stdout.decode("utf-8", "replace").splitlines()
+        first = lines[0] if lines else ""
+        suffix = "  (compiled with Visual C++ 2008 RTM, cl 15.00.21022.08, the compiler the game was built with: submit it as it is)"
+        rtm = first.endswith(suffix)
+        if rtm: first = first[:-len(suffix)]
+        allowed = (pack or {}).get("accept_also") or []
+        accepted = next((flags for flags in allowed if first == "MATCH  (under %s, a flag set this function also accepts: submit it as it is)" % " ".join(flags)), None)
+        match = code == 0 and (first == "MATCH" or accepted is not None)
+        return match, {"status": "match" if match else "not_match", "mode": "plain", "accepted_flags": accepted or (pack or {}).get("flags"), "compiler": "rtm" if match and rtm else None}
     try:
         value = json.loads(stdout)
     except (ValueError, UnicodeDecodeError):
@@ -208,7 +227,9 @@ def _interpret(code: int, stdout: bytes, *, plain: bool) -> tuple[bool, dict]:
     if not isinstance(value, dict) or not isinstance(value.get("status"), str):
         return False, {"status": "infrastructure_error", "errors": ["Unknown official checker JSON shape"]}
     # Preserve only the official public diagnostic fields.
-    checker = {k: value[k] for k in ("status", "errors", "diffs", "ndiff_insn", "extent", "diff") if k in value}
+    checker = {k: value[k] for k in ("status", "errors", "diffs", "ndiff_insn", "extent", "diff", "accepted_flags", "compiler") if k in value}
+    if "accepted_flags" in checker and checker["accepted_flags"] not in ((pack or {}).get("accept_also") or []):
+        return False, {"status": "infrastructure_error", "errors": ["Checker reported a flag set absent from the original pack"]}
     return code == 0 and checker["status"] == "match", checker
 
 
@@ -257,7 +278,7 @@ def check(config: dict, pack_dir: Path, candidate: Path, work: Path, *, plain: b
     (work / "stderr.log").write_bytes(stderr)
     unchanged = (versions == _versions(cfg) and _sha(snapshot) == source_hash
                  and _tree(pack_dir) == pack_hash and _tree(work / "pack") == pack_hash)
-    match, checker = _interpret(code, stdout, plain=plain)
+    match, checker = _interpret(code, stdout, plain=plain, pack=json.loads((work / "pack/pack.json").read_text()))
     # Only a completed attestation proves that setup reached exec.
     try:
         ready = json.loads((work / "sandbox-ready.json").read_text())
@@ -350,6 +371,8 @@ def _child(payload: Path) -> None:
         raise CompilerError("Sandbox child must initialize its private PID namespace")
     read = [Path(p) for p in ("/usr", "/bin", "/lib", "/lib64", "/etc/ld.so.cache", "/etc/ld.so.conf", "/etc/ld.so.conf.d", "/etc/nsswitch.conf", "/etc/passwd", "/etc/group", "/etc/localtime", "/etc/fonts", "/proc/self", "/proc/meminfo", "/proc/cpuinfo", "/proc/stat", "/proc/uptime", "/proc/sys/vm/mmap_min_addr", "/proc/sys/kernel/random/boot_id")]
     read.extend(Path(cfg[k]) for k in ("game_exe", "checker_dir", "compiler_dir", "function_index", "symbols"))
+    if "rtm_compiler_dir" in cfg:
+        read.append(Path(cfg["rtm_compiler_dir"]))
     if "compiler_tips" in cfg:
         read.append(Path(cfg["compiler_tips"]))
     # Preserve a configured venv's site-packages without granting its project root.

@@ -26,6 +26,7 @@ from .notion_oauth import OAuthError
 from .project import FNV, ProjectError
 from .store import AlreadyRunning, Store, UncertainOperation, OperationNotStarted, read_json
 from .lifecycle import process_identity, owner_alive
+from .preparation import PreparationPool
 
 DEFAULT_STATE = "~/.local/share/fnv-relay"
 PATHS = ("game_exe", "checker_dir", "compiler_dir", "function_index", "symbols", "compiler_tips", "wine_prefix", "python")
@@ -488,8 +489,11 @@ def serve(store, once=False, order=None, menu_owner=None):
                 engine.resume_lane(lane["route_token"])
         store.set("worker", {**(process_identity() or {"pid":os.getpid()}), "running": True, "started_at": time.time()})
         code = 0
+        preparation = None
         with shutdown_signals(event):
             try:
+                preparation=PreparationPool(store.root,clients,stopping,engine.preparation_failed)
+                engine.preparation=preparation
                 print("Relay running. Leave this terminal open. A running relay does not yet mean a claim is assigned.", flush=True)
                 for row in store.lanes():
                     if row.get("landing"):
@@ -522,8 +526,11 @@ def serve(store, once=False, order=None, menu_owner=None):
                 project.set_stop_event(None)
                 store.set("shutdown_requested", True)
                 store.set("drain", True)
-                cleanup_code = release_report(store, engine, "Owner stopped relay; preserve checked work for continuation")
-                store.set("worker", {"pid": os.getpid(), "running": False, "stopped_at": time.time()})
+                try:
+                    if preparation is not None:preparation.close()
+                finally:
+                    cleanup_code = release_report(store, engine, "Owner stopped relay; preserve checked work for continuation")
+                    store.set("worker", {"pid": os.getpid(), "running": False, "stopped_at": time.time()})
         return code or cleanup_code
 
 
@@ -646,6 +653,9 @@ def run(args, store):
 
 def main(argv=None):
     args = parser().parse_args(argv)
+    if args.command in ("menu", "text-menu"):
+        from .app_updates import activate
+        activate(args.state_dir, argv)
     store = None
     try:
         store = Store(args.state_dir)

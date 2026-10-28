@@ -208,6 +208,8 @@ Before assignment delivery and candidate compilation, the target address must ex
 
 Assignments pin a validated generation for target export, diagnostic checks and independent plain validation. Downloading a new generation does not overwrite files used by active assignments. Check caches are scoped to that generation: an explicitly submitted new batch can check against updated tools without reusing an old-generation error, while repeated batches under the same generation reuse completed results. Refreshing data alone never replays compiler checks.
 
+Assignment preparation can overlap across every eligible lane, including after restart and for lanes added while the relay runs. Pack downloads, context export and delivery run in background jobs with separate SQLite connections and clients. Working lanes can still receive their normal controller checks while other lanes prepare. There is only one preparation job per lane; another lane does not have to finish before a preparation slot becomes available. Claim acquisition and compiler checks retain their existing controller sequencing. Notion OAuth sessions remain serialized to protect refresh-token rotation, so Notion calls can still queue. Failures retain the existing journal and retry delay; shutdown stops admissions, waits for preparation to finish or stop, and then releases remaining claims.
+
 FNV controls when project-paused functions return to its eligible pool. The relay retains their parked history without treating that pause as a permanent exclusion. Reopened functions remain subject to size, order, fresh-only and attempt-limit settings; operator-parked and capped work stay excluded.
 
 ### Optional batch-attempt limits

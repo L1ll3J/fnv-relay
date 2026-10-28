@@ -72,4 +72,45 @@ In **Add lane** or **Lane controls**, select any combination of size buckets ind
 
 Start checks the current official checker and shared data before accepting work. New claims use validated tool snapshots, refreshed at least every five minutes while selecting work. A missing target address triggers another official refresh before candidate checks can run. Existing assignments retain their snapshot; downloads never overwrite files used by another running check or profile.
 
+Every eligible lane can prepare its assignment concurrently, with one preparation job per lane and no fixed four-lane cap. Each preparation job has its own state connection and service clients; claim acquisition and compiler checks stay on the controller. Notion requests may still queue behind the shared OAuth lock. Stopping waits for preparation jobs before releasing remaining claims.
+
 Functions parked because FNV paused them can return through FNV's eligible pool after reopening. Fresh-only settings and configured attempt limits still apply; work parked by the operator stays parked.
+
+Official tool generations also include the current upstream `agents.md` as
+reference data for new assignments. Existing generations and active leases stay
+pinned. Plain validation recognizes the official accepted-alternate-flags MATCH
+format only for flag sets listed in the original pack; proof-only override
+MATCHes remain ineligible for ordinary submission. The accepted flag set is
+retained in checker evidence. Operator-authored prompts are not overwritten by
+upstream documentation updates.
+
+### Automatic application releases
+
+The operator UI checks the configured GitHub repository for stable releases at
+startup and hourly. Settings can disable these checks. A release must include a
+package/version-bound `release.json` and a wheel with the matching SHA-256.
+Installation and dependency/import checks happen in a separate runtime before an
+atomic next-launch pointer is published. The running UI, workers and their pinned
+assignments keep their current code. A failed check or install retains the last
+good runtime and exposes update status; it does not block work.
+
+Only a later operator UI launch activates a prepared version. Worker and
+maintenance commands do not silently switch versions mid-operation. The first
+installation of this updater still requires the usual explicit package upgrade.
+Published Git tags trigger the release workflow, which builds the wheel and its
+manifest. This is application code from the configured repository, not arbitrary
+URLs supplied by a worker or report.
+
+
+### Optional VC++ 2008 RTM fallback
+
+Keep SP1 15.00.30729.01 intact and install RTM 15.00.21022.08 separately,
+following the official checker instructions. Set `paths.rtm_compiler_dir` in
+the owner configuration to its root (containing `VC/bin/cl.exe`). New official
+snapshots bind both compiler versions and core component hashes, so cached
+SP1 results cannot suppress a check under a different compiler generation.
+Existing assignments keep their pinned environment; older snapshots do not
+inherit the newly configured fallback. Both toolchains remain read-only in
+the compiler sandbox and are fingerprinted before and after each check.
+Official RTM annotations are accepted only on successful, pack-bound plain
+MATCH output; independent validation remains required before submission.
