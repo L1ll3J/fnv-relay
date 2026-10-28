@@ -14,7 +14,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, DataTable, Footer, Header, Input, Label, Select, Static, TabbedContent, TabPane, TextArea
+from textual.widgets import Button, Checkbox, DataTable, Footer, Header, Input, Label, Select, SelectionList, Static, TabbedContent, TabPane, TextArea
 
 from . import presets, presentation, preferences, starter_templates
 from .dashboard import Dashboard, clock
@@ -104,7 +104,8 @@ class AddLaneScreen(ModalScreen[dict | None]):
             yield Label('Add a lane')
             yield Input('Lane '+str(self.number),placeholder='Lane name',id='new-label',max_length=100)
             yield Select([('Largest first','largest'),('Smallest first','smallest'),('Random size band','random')],value='largest',allow_blank=False,id='new-order')
-            yield Select(preferences.BUCKETS,value='any',allow_blank=False,id='new-band',prompt='Size bucket')
+            yield Static('Size buckets: click or press Space to toggle. Select one or more; all five = any size.')
+            yield SelectionList(*[(label,value,True) for label,value in preferences.BUCKETS[1:]],id='new-band')
             yield Checkbox('Allow previously attempted functions',value=False,id='new-attempted')
             yield Input('0',placeholder='Batch attempt limit per function (0 = off)',id='new-max-attempts',type='integer')
             yield Static('Attempt limit: 0 = off. One accepted batch is one round, whether it has one candidate or eight.')
@@ -117,13 +118,15 @@ class AddLaneScreen(ModalScreen[dict | None]):
         if event.button.id=='cancel':self.dismiss(None);return
         label=self.query_one('#new-label',Input).value.strip()
         if not label:self.notify('Enter a lane name.',severity='warning');return
+        bands=self.query_one('#new-band',SelectionList).selected
+        if not bands:self.notify('Select at least one size bucket.',severity='warning');return
         try:
             maximum=int(self.query_one('#new-max-attempts',Input).value)
             from .attempts import validate
             validate(maximum)
         except ValueError:self.notify('Enter a non-negative attempt limit (0 = off).',severity='warning');return
         self.dismiss({'label':label,'max_attempts':maximum,'order':self.query_one('#new-order',Select).value,
-                      'allow_attempted':self.query_one('#new-attempted',Checkbox).value,'band':self.query_one('#new-band',Select).value})
+                      'allow_attempted':self.query_one('#new-attempted',Checkbox).value,'bands':bands})
 
 
 class RelayApp(App):
@@ -149,6 +152,7 @@ class RelayApp(App):
     #lane-detail { height: auto; min-height: 3; max-height: 8; margin-top: 1; }
     #notice { height: auto; min-height: 1; max-height: 3; padding: 0 2; color: #e9c775; }
     Select, Input { margin: 0 0 1 0; }
+    SelectionList { height: 7; margin: 0 0 1 0; }
     #prompt-editor { height: 1fr; min-height: 8; }
     .dialog { width: 90%; height: 85%; padding: 1 2; border: thick #d5b775; background: #192229; }
     .confirmation { width: 72; height: auto; max-height: 90%; padding: 1 2; border: thick #d5b775; background: #192229; }
@@ -188,7 +192,8 @@ class RelayApp(App):
                     yield Static('Select a lane in Overview. Settings apply to future selections; saved unfinished work can still be resumed.',classes='help')
                     yield Static('',id='policy-info',markup=False)
                     yield Select([('Largest first','largest'),('Smallest first','smallest'),('Random size band','random')],allow_blank=False,value='largest',id='order')
-                    yield Select(preferences.BUCKETS,value='any',allow_blank=False,id='band',prompt='Size bucket')
+                    yield Static('Size buckets: click or press Space to toggle. Select one or more; all five = any size.',classes='help')
+                    yield SelectionList(*[(label,value,True) for label,value in preferences.BUCKETS[1:]],id='band')
                     yield Static('Size bucket for new selections. FNV uses 1 KB = 1,024 B: 1–4 KB starts at 1,025 B; 4 KB+ starts at 4,097 B.',classes='help')
                     yield Checkbox('Allow previously attempted functions',value=True,id='allow-attempted')
                     yield Static('Batch attempt limit per function: 0 = off. Existing rounds in this lane count across reconnects. An active handoff finishes even if the limit is changed.',classes='help')
@@ -293,7 +298,7 @@ class RelayApp(App):
                         'address':row['address'],'size':str(row['size_bytes'] or '—'),'best':str(progress['best']) if progress['best'] is not None else '—',
                         'checks':str(row['checks']),'attempts':str(row['attempts'])+(' / '+str(row['max_attempts']) if row['max_attempts'] else ' / off'),'since_checks':str(progress['checks_since_best']) if progress['checks_since_best'] is not None else '—',
                         'since_time':progress['since_best'],'expires':clock(row['expires_at']),
-                        'policy':row['order']+' · '+dict((value,label) for label,value in preferences.BUCKETS).get(row['band'],row['band'])+(' · fresh' if not row['allow_attempted'] else ' · any'),
+                        'policy':row['order']+' · '+row['bucket_label']+(' · fresh' if not row['allow_attempted'] else ' · any'),
                         'error':'change queued' if row['control_pending'] else 'handoff requested' if row['awaiting_handoff'] else 'waiting for eligible work' if row['attempt_pool_empty'] else 'waiting for fresh work' if row['waiting_fresh'] else row['error_type'] or '—'}
                 cells=[Text(values[key]) for key,_ in columns]
                 if changed:table.add_row(*cells,key=row['route_token'])
@@ -342,7 +347,9 @@ class RelayApp(App):
         # Live table/selector refreshes must not overwrite this lane's unsaved edits.
         if self.controls_route != self.selected:
             self.query_one('#order',Select).value=policy.get('order','largest')
-            self.query_one('#band',Select).value=policy.get('band','any')
+            buckets=self.query_one('#band',SelectionList)
+            buckets.deselect_all()
+            for value in preferences.selected_buckets(policy):buckets.select(value)
             self.query_one('#allow-attempted',Checkbox).value=policy.get('allow_attempted',True)
             self.query_one('#max-attempts',Input).value=str(policy.get('max_attempts') or 0)
             self.controls_route=self.selected
@@ -465,7 +472,7 @@ class RelayApp(App):
     async def action_quit(self):await self.stop_worker(exit_after=True)
 
     def choose_add(self,choice):
-        if choice:self.launch_command(['lane','create','--label',choice['label'],'--order',choice['order'],'--allow-attempted' if choice['allow_attempted'] else '--no-allow-attempted','--max-attempts',str(choice.get('max_attempts',0)),'--band',choice.get('band','any')])
+        if choice:self.launch_command(['lane','create','--label',choice['label'],'--order',choice['order'],'--allow-attempted' if choice['allow_attempted'] else '--no-allow-attempted','--max-attempts',str(choice.get('max_attempts',0)),'--bands',*choice['bands']])
 
     def update_notepad_options(self):
         self.note_loading=True
@@ -502,9 +509,11 @@ class RelayApp(App):
             if not lane or not lane.get('landing'):self.notice('Add or recover a lane first.');return
             self.push_screen(PromptScreen(lane,self.store))
         elif action=='apply-policy' and self.selected:
+            bands=self.query_one('#band',SelectionList).selected
+            if not bands:self.notice('Select at least one size bucket.');return
             args=['lane','configure',self.selected,'--order',self.query_one('#order',Select).value,
                   '--allow-attempted' if self.query_one('#allow-attempted',Checkbox).value else '--no-allow-attempted',
-                  '--max-attempts',self.query_one('#max-attempts',Input).value,'--band',self.query_one('#band',Select).value]
+                  '--max-attempts',self.query_one('#max-attempts',Input).value,'--bands',*bands]
             if self.query_one('#switch-now',Checkbox).value:
                 args.append('--switch-now');self.push_screen(ConfirmScreen('Preserve and release the current assignment, park its work, and select a new function with these settings?'),lambda yes:self.launch_command(args) if yes else None)
             else:self.launch_command(args)

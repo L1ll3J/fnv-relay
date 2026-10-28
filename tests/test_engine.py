@@ -256,6 +256,43 @@ def test_patch_base_traversal_rejected_before_reading_or_checking(env):
     assert env.checker.calls == []
 
 
+def test_literal_edits_can_use_verified_original_pack_source_without_cached_candidate(env):
+    current=assign(env);directory=Path(current['lease']['directory'])
+    manifest=directory/'pack/pack.json'
+    data=json.loads(manifest.read_text());data['source']='source.cpp';manifest.write_text(json.dumps(data))
+    base=(directory/'pack/source.cpp').read_bytes()
+    pointer=candidate(env,'patched','int target(){return 40;}\n',file_override={
+        'base_source_sha256':sha(base),
+        'literal_edits':[{'before_utf8':'int target();','after_utf8':'int target(){return 40;}'}]})
+    assert not (directory/'sources'/(sha(base)+'.cpp')).exists()
+    post_batch(env,[pointer]);env.engine.poll()
+    assert [x['source'] for x in env.checker.calls]==[b'int target(){return 40;}\n']
+    assert not env.store.get('last_error:'+env.route)
+
+
+@pytest.mark.parametrize('mode',['unknown_digest','corrupt_cache','escaped_manifest','missing_original'])
+def test_unavailable_or_invalid_patch_base_rejects_batch_without_blocking_next(env,mode):
+    current=assign(env);directory=Path(current['lease']['directory'])
+    original=directory/'pack/source.cpp';base=original.read_bytes()
+    manifest=directory/'pack/pack.json'
+    data=json.loads(manifest.read_text());data['source']='source.cpp'
+    if mode=='escaped_manifest':data['source']='../outside.cpp';(directory/'outside.cpp').write_bytes(base)
+    if mode=='missing_original':original.unlink()
+    manifest.write_text(json.dumps(data))
+    if mode=='corrupt_cache':
+        cached=directory/'sources'/(sha(base)+'.cpp');cached.parent.mkdir(exist_ok=True);cached.write_bytes(b'corrupt')
+    pointer=candidate(env,'patched','int target(){return 40;}\n',file_override={
+        'base_source_sha256':'0'*64 if mode=='unknown_digest' else sha(base),
+        'literal_edits':[{'before_utf8':'int target();','after_utf8':'int target(){return 40;}'}]})
+    post_batch(env,[pointer],'bad-base')
+    post_batch(env,[candidate(env,'later','int target(){return 39;}')],'later-batch')
+    env.engine.poll()
+    assert [x['source'] for x in env.checker.calls]==[b'int target(){return 39;}']
+    notices=[r.get('payload',{}) for r in env.notion.messages(current['outbox'])]
+    assert any(r.get('status')=='BATCH_REJECTED' and r.get('batch_message_id')=='bad-base' for r in notices)
+    assert not env.store.get('last_error:'+env.route)
+
+
 def test_duplicate_batch_rejected_before_any_compilation(env):
     assign(env)
     pointer = candidate(env, "repeat", "int target(){return 41;}")

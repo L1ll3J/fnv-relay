@@ -26,6 +26,7 @@ from .notion_oauth import OAuthError
 from .project import FNV, ProjectError
 from .store import AlreadyRunning, Store, UncertainOperation, OperationNotStarted, read_json
 from .lifecycle import process_identity, owner_alive
+from .preparation import PreparationPool
 
 DEFAULT_STATE = "~/.local/share/fnv-relay"
 PATHS = ("game_exe", "checker_dir", "compiler_dir", "function_index", "symbols", "compiler_tips", "wine_prefix", "python")
@@ -67,7 +68,9 @@ def parser():
     create.add_argument("--order", choices=preferences.ORDERS, help="Default: task order saved during setup")
     create.add_argument("--allow-attempted", action=argparse.BooleanOptionalAction, default=None, help="Allow previously attempted functions in new selections")
     create.add_argument("--max-attempts", type=int, default=0, help="Maximum batch rounds per function in this lane; 0 = off")
-    create.add_argument("--band", choices=[value for _,value in preferences.BUCKETS])
+    sizes=create.add_mutually_exclusive_group()
+    sizes.add_argument("--band", choices=[value for _,value in preferences.BUCKETS])
+    sizes.add_argument("--bands", nargs='+', choices=[value for _,value in preferences.BUCKETS], help="Choose multiple size buckets; any selects all")
     create.add_argument("--address")
     create.add_argument("--min-bytes", type=int, default=0)
     create.add_argument("--max-bytes", type=int, default=2**31 - 1)
@@ -76,7 +79,9 @@ def parser():
     settings = lane.add_parser("configure", help="Change future selection; optionally park current work and switch now")
     settings.add_argument("route")
     settings.add_argument("--order", choices=preferences.ORDERS)
-    settings.add_argument("--band", choices=[value for _,value in preferences.BUCKETS], help="Future function size bucket; any clears the bucket filter")
+    sizes=settings.add_mutually_exclusive_group()
+    sizes.add_argument("--band", choices=[value for _,value in preferences.BUCKETS], help="Future function size bucket; any clears the bucket filter")
+    sizes.add_argument("--bands", nargs='+', choices=[value for _,value in preferences.BUCKETS], help="Future size buckets; any selects all")
     settings.add_argument("--allow-attempted", action=argparse.BooleanOptionalAction, default=None)
     settings.add_argument("--paused", action=argparse.BooleanOptionalAction, default=None, help="Pause or unpause future selections")
     settings.add_argument("--max-attempts", type=int, help="Batch rounds per function, including existing rounds; 0 = off")
@@ -138,8 +143,7 @@ def policy(args):
         result["max_attempts"]=args.max_attempts
     if getattr(args,"allow_attempted",None) is not None:
         result["allow_attempted"] = args.allow_attempted
-    if args.band and args.band != "any":
-        result["band"] = args.band
+    preferences.set_buckets(result,band=args.band,bands=getattr(args,'bands',None))
     if args.address:
         result["address"] = args.address
     return result
@@ -266,7 +270,7 @@ def lane_command(store, args):
         lane = presentation.resolve_lane(store,args.route)
         project = FNV(store.secrets().get('fnv_api_key','')) if args.switch_now and lane.get('lease') else None
         engine = Engine(store,project,None,watchdog=False)
-        options=dict(order=args.order,allow_attempted=args.allow_attempted,switch_now=args.switch_now,paused=args.paused,max_attempts=args.max_attempts,band=args.band)
+        options=dict(order=args.order,allow_attempted=args.allow_attempted,switch_now=args.switch_now,paused=args.paused,max_attempts=args.max_attempts,band=args.band,bands=args.bands)
         try:
             with store.lock('serve'):
                 lane=configure_lane(engine,lane['route_token'],**options)
@@ -485,8 +489,11 @@ def serve(store, once=False, order=None, menu_owner=None):
                 engine.resume_lane(lane["route_token"])
         store.set("worker", {**(process_identity() or {"pid":os.getpid()}), "running": True, "started_at": time.time()})
         code = 0
+        preparation = None
         with shutdown_signals(event):
             try:
+                preparation=PreparationPool(store.root,clients,stopping,engine.preparation_failed)
+                engine.preparation=preparation
                 print("Relay running. Leave this terminal open. A running relay does not yet mean a claim is assigned.", flush=True)
                 for row in store.lanes():
                     if row.get("landing"):
@@ -519,8 +526,11 @@ def serve(store, once=False, order=None, menu_owner=None):
                 project.set_stop_event(None)
                 store.set("shutdown_requested", True)
                 store.set("drain", True)
-                cleanup_code = release_report(store, engine, "Owner stopped relay; preserve checked work for continuation")
-                store.set("worker", {"pid": os.getpid(), "running": False, "stopped_at": time.time()})
+                try:
+                    if preparation is not None:preparation.close()
+                finally:
+                    cleanup_code = release_report(store, engine, "Owner stopped relay; preserve checked work for continuation")
+                    store.set("worker", {"pid": os.getpid(), "running": False, "stopped_at": time.time()})
         return code or cleanup_code
 
 

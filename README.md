@@ -66,11 +66,13 @@ Fresh-only selection uses the project's never-claimed preference and never falls
 
 The prompt notepad comes with the owner's **Notion tool issues** and **Ending turns early** presets verbatim. Edits and custom prompts stay in the profile's private local state and are never automatically sent or added to agent starters. Clipboard support depends on the terminal; the text is also selectable.
 
-In **Add lane** or **Lane controls**, choose a size bucket independently of largest/smallest/random order: **Any size**, **≤255 B**, **256–511 B**, **512 B–1 KB**, **1–4 KB**, or **4 KB+**. Bucket selection uses the eligible function list so ordering still works within a bucket. Changes apply to future selections; current work stays intact unless you choose to switch now.
+In **Add lane** or **Lane controls**, select any combination of size buckets independently of largest/smallest/random order: **≤255 B**, **256–511 B**, **512 B–1 KB**, **1–4 KB**, and **4 KB+**. Click or press Space to toggle each bucket. All five means any size; at least one must stay selected. Only checked buckets enter the selection pool, including when the chosen buckets have gaps between them. Changes apply to future selections; current work stays intact unless you choose to switch now.
 
 **Starter Prompt** opens viewing, copying and template-editing options. Preview a custom template for the selected lane, save it for this profile’s future starters, cancel edits or restore the original. Keep `{{landing_url}}` and `{{route_uuid}}`; `{{lane_label}}` is optional. Saved templates also apply to startup output and `lane prompt`. The original default wording is unchanged, and saving a template does not send it anywhere.
 
 Start checks the current official checker and shared data before accepting work. New claims use validated tool snapshots, refreshed at least every five minutes while selecting work. A missing target address triggers another official refresh before candidate checks can run. Existing assignments retain their snapshot; downloads never overwrite files used by another running check or profile.
+
+Every eligible lane can prepare its assignment concurrently, with one preparation job per lane and no fixed four-lane cap. Each preparation job has its own state connection and service clients; claim acquisition and compiler checks stay on the controller. Notion requests may still queue behind the shared OAuth lock. Stopping waits for preparation jobs before releasing remaining claims.
 
 Functions parked because FNV paused them can return through FNV's eligible pool after reopening. Fresh-only settings and configured attempt limits still apply; work parked by the operator stays parked.
 

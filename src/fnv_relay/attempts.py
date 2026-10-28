@@ -157,11 +157,19 @@ def publish_request(engine,lane,waiting):
 
 
 def receive(engine,lane,message):
-    waiting=lane.get('attempt_handoff')
-    if not waiting or message.get('request_id')!=waiting.get('request_id'):raise ValueError('No matching handoff request')
     engine.scope(lane,message)
+    waiting=lane.get('attempt_handoff')
     fields=('summary','remaining_mismatches','approaches_tried','next_steps')
-    if any(not isinstance(message.get(k),str) or not 1<=len(message[k])<=12000 for k in fields):raise ValueError('Handoff requires bounded summary, mismatches, approaches and next steps')
+    reason=None
+    if not waiting:reason='unsolicited_handoff'
+    elif message.get('request_id')!=waiting.get('request_id'):reason='request_id_mismatch'
+    elif any(not isinstance(message.get(k),str) or not 1<=len(message[k])<=12000 for k in fields):reason='invalid_handoff_fields'
+    if reason:
+        key='handoff-rejected:'+lane['route_token']+':'+message['message_id']
+        engine.store.set(key,{'reason_code':reason,'message':message})
+        engine.publish(lane,key,{'status':'HANDOFF_REJECTED','message_id':message['message_id'],'reason_code':reason})
+        engine.store.event('handoff_rejected',{'route_token':lane['route_token'],'message_id':message['message_id'],'reason_code':reason})
+        return
     directory=Path(lane['lease']['directory'])
     write_json(directory/'attempt-handoff.json',message)
     waiting['received']=True;waiting['handoff_path']=str(directory/'attempt-handoff.json')

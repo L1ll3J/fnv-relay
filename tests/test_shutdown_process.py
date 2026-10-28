@@ -24,6 +24,7 @@ class Notion:
  def whoami(self): return {}
 class Engine:
  def __init__(self,store,*a,should_stop=None,watchdog=True): self.store=store; self.stopping=should_stop
+ def preparation_failed(self,*a): raise AssertionError('No preparation job expected')
  def poll(self):
   (root/'ready').write_text('ready')
   while not self.stopping(): time.sleep(.01)
@@ -67,3 +68,35 @@ def test_disappeared_menu_owner_releases_before_polling(tmp_path):
     assert result.returncode==0,(result.stdout,result.stderr)
     assert (tmp_path/'released').is_file()
     assert not (tmp_path/'ready').exists()
+
+
+@pytest.mark.parametrize('name',['SIGINT','SIGTERM','SIGHUP'])
+def test_shutdown_joins_active_preparation_before_releasing_claims(tmp_path,name):
+    if sys.platform != 'linux':pytest.skip('Supported controller platform is Linux')
+    script=_WORKER.replace("'state':'assigned'", "'state':'preparing'")
+    script=script.replace("  (root/'ready').write_text('ready')", """  self.preparation.submit(self.store.lane('synthetic-lane'))
+  while not (root/'preparation-started').exists() and not self.stopping(): time.sleep(.01)
+  (root/'ready').write_text('ready')""")
+    script=script.replace("  lane=self.store.lane('synthetic-lane');", "  assert (root/'preparation-stopped').exists(), 'Release raced preparation'\n  lane=self.store.lane('synthetic-lane');")
+    script=script.replace('cli.Engine=Engine', """from fnv_relay import preparation
+class PreparingEngine:
+ def __init__(self,store,*args,should_stop=None,**kwargs):self.store=store;self.stopping=should_stop
+ def prepare_assignment(self,lane):
+  (root/'preparation-started').write_text('started')
+  while not self.stopping():time.sleep(.01)
+  self.store.set('preparation-joined-before-release',True)
+  (root/'preparation-stopped').write_text('stopped')
+preparation.Engine=PreparingEngine
+cli.Engine=Engine""")
+    env=dict(os.environ,HOME=str(tmp_path))
+    child=subprocess.Popen([sys.executable,'-c',script,str(tmp_path)],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    try:
+        deadline=time.monotonic()+10
+        while not (tmp_path/'ready').exists() and time.monotonic()<deadline and child.poll() is None:time.sleep(.01)
+        assert (tmp_path/'ready').exists(),'Synthetic preparation did not start'
+        child.send_signal(getattr(signal,name));output,error=child.communicate(timeout=10)
+        assert child.returncode==0,(output,error)
+        assert (tmp_path/'preparation-stopped').exists() and (tmp_path/'released').exists()
+        assert b'1 released, 0 pending, 0 uncertain' in output
+    finally:
+        if child.poll() is None:child.kill();child.wait()

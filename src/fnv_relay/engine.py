@@ -16,7 +16,7 @@ import uuid
 from .store import Store, AlreadyRunning, UncertainOperation, write_json
 from .project import ProjectError
 from .lifecycle import process_identity, owner_alive
-from . import compiler, context, guidance, attempts, official_tools
+from . import compiler, context, guidance, attempts, official_tools, preferences
 
 PROTOCOL = 'fnv-relay/2'
 BANDS = ['<=255', '256-511', '512-1K', '1K-4K', '4K+']
@@ -55,6 +55,7 @@ class Engine:
         self.owner = process_identity()
         self._should_stop = should_stop or (lambda: False)
         self._locked_routes = set()
+        self.preparation = None
 
     def stop_requested(self):
         return bool(self._should_stop() or self.store.get('shutdown_requested'))
@@ -178,6 +179,7 @@ class Engine:
 
     def create_lane(self, parent, policy, label='Pro lane'):
         attempts.validate(policy.get('max_attempts'))
+        preferences.selected_buckets(policy)
         self.model_label({'policy':policy})
         if any(row.get('state') == 'setup' for row in self.store.lanes()):
             raise ValueError('Finish the incomplete lane setup before adding another lane')
@@ -267,7 +269,7 @@ class Engine:
         available = {r['band']: r for r in self.project.call('list_bands', {})['bands']}
         order = policy.get('order', 'largest')
         if order not in ('largest', 'smallest', 'random'): raise ValueError('Unsupported selection order')
-        choices = [policy['band']] if policy.get('band') else list(BANDS)
+        choices = preferences.selected_buckets(policy)
         bounds = [(0,255),(256,511),(512,1024),(1025,4096),(4097,2**31)]
         choices = [b for b in choices if bounds[BANDS.index(b)][1] >= policy.get('min_bytes',0) and bounds[BANDS.index(b)][0] <= policy.get('max_bytes',2**31)]
         if order == 'random':
@@ -280,14 +282,14 @@ class Engine:
             empty = lane.get('fresh_empty_bands', {}).get(b, 0) if policy.get('allow_attempted',True) is False else 0
             if empty > self.clock(): continue
             if row.get('allowed') and row.get('open', 0) > row.get('reserved_for_new', 0):
-                if policy.get('max_attempts') or policy.get('band'):
+                if policy.get('max_attempts') or policy.get('band') or policy.get('bands'):
                     chosen=attempts.selection(self,lane,b)
                     if chosen:
                         lane.pop('attempt_pool_empty',None);self.store.put_lane(lane)
                         return chosen
                     continue
                 return {'band': b, 'prefer': 'any' if policy.get('allow_attempted',True) else 'fresh', 'context_mode': 'resume'}
-        if policy.get('max_attempts') or policy.get('band'):
+        if policy.get('max_attempts') or policy.get('band') or policy.get('bands'):
             lane['attempt_pool_empty']=True;lane['admission_not_before']=self.clock()+60;self.store.put_lane(lane)
         return None
 
@@ -338,6 +340,7 @@ class Engine:
         with self.lane_lock(lane['route_token']):
             self.refresh(lane)
             if self.admission_blocked() or not self.ready_for_claim(lane) or lane['state'] not in ('idle', 'resume_pending'): return
+            if self.preparation is not None and not self.preparation.available(lane['route_token']): return
             attempts.tick(self,lane)
             if lane.get('attempt_handoff'):return
             resume = lane.get('resume')
@@ -390,7 +393,21 @@ class Engine:
                 with (directory/'watchdog.log').open('ab') as log:
                     process = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
                 write_json(directory/'watchdog.json', {'pid': process.pid, 'owner':self.owner, 'model_calls': 0})
-        self.prepare_assignment(lane)
+        self.prepare(lane)
+
+    def prepare(self, lane):
+        if self.preparation is None:self.prepare_assignment(lane)
+        else:self.preparation.submit(lane)
+
+    def preparation_failed(self, route, claim, error):
+        with self.lane_lock(route):
+            lane=self.store.lane(route)
+            self.store.event('preparation_failed',{'route_token':route,'claim_id':claim,'type':type(error).__name__,'message':str(error)[:400]})
+            if not lane or lane['state']!='preparing' or (lane.get('lease') or {}).get('claim_id')!=claim:return
+            lane['preparation_retry_at']=self.clock()+30;self.store.put_lane(lane)
+            if isinstance(error,ProjectError) and not error.uncertain and error.retry_after:
+                self.store.set('project_read_not_before',self.clock()+max(0,error.retry_after))
+            self.store.set('last_error:'+route,{'type':type(error).__name__,'http_status':getattr(error,'status',None),'message':str(error)[:400]})
 
     def prepare_assignment(self, lane):
         self.refresh(lane)
@@ -467,10 +484,15 @@ class Engine:
             return True
 
     def tool_paths(self, lane):
+        claim=lane['lease']['claim_id']
         paths, snapshot = official_tools.for_target(self.store, self.project, self.config['paths'], lane['lease'], now=self.clock())
-        if snapshot and lane['lease'].get('tool_snapshot') != snapshot:
-            lane['lease']['tool_snapshot'] = snapshot
-            self.store.put_lane(lane)
+        with self.lane_lock(lane['route_token']):
+            self.refresh(lane)
+            if (lane.get('lease') or {}).get('claim_id')!=claim:
+                raise ValueError('Claim changed during tool preflight')
+            if snapshot and lane['lease'].get('tool_snapshot') != snapshot:
+                lane['lease']['tool_snapshot'] = snapshot
+                self.store.put_lane(lane)
         return paths
 
     def continuation_context(self, lane, directory, files):
@@ -515,7 +537,16 @@ class Engine:
             base = f['base_source_sha256']
             if not isinstance(base,str) or not re.fullmatch('[0-9a-f]{64}',base): raise ValueError('Invalid base source digest')
             source = self.store.root/'claims'/lane['lease']['claim_id']/'sources'/(base+'.cpp')
-            raw = source.read_bytes()
+            try: raw = source.read_bytes()
+            except FileNotFoundError:
+                pack = (Path(lane['lease']['directory'])/'pack').resolve()
+                manifest = json.loads((pack/'pack.json').read_text())
+                name = manifest.get('source')
+                if not isinstance(name,str) or not name: raise ValueError('Patch base is unavailable')
+                original_source = (pack/name).resolve()
+                if not original_source.is_relative_to(pack): raise ValueError('Patch base escaped pack')
+                try: raw = original_source.read_bytes()
+                except FileNotFoundError: raise ValueError('Patch base is unavailable') from None
             if sha(raw) != base: raise ValueError('Patch base hash differs')
             edits = f['literal_edits']
             if not isinstance(edits, list) or not 1 <= len(edits) <= 16: raise ValueError('Invalid edit count')
@@ -853,6 +884,7 @@ class Engine:
         self.publish(lane,'request:'+lease['claim_id']+':'+message['message_id'],response)
 
     def poll(self):
+        if self.preparation is not None:self.preparation.reap()
         for lane in self.store.lanes():
             if self.stop_requested(): break
             if self.clock() < (self.store.get('project_read_not_before') or 0): break
@@ -872,7 +904,7 @@ class Engine:
                 self.refresh(lane)
                 self.publish_closed_leases(lane)
                 if lane['state'] == 'preparing':
-                    if self.clock() >= lane.get('preparation_retry_at', 0): self.prepare_assignment(lane)
+                    if self.clock() >= lane.get('preparation_retry_at', 0): self.prepare(lane)
                     continue
                 if lane['state'] in ('setup','claim_intent','closed_requires_reconciliation') or lane.get('paused'): continue
                 self.ensure_work_guidance(lane)
